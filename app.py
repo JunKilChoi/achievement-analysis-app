@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.0
+성취수준별 평가결과 분석 웹앱 v1.2
+
+버전 기록
+- v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
+- v1.2: 화면·AI 프롬프트·엑셀 출력의 정답률/비율/변별도/수준간격차를 % 기준으로 표시
+
+주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
 - 자동 파싱/검증/점수 계산
 - 웹앱 내 분석표 확인
@@ -10,6 +16,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import re
 import zipfile
@@ -27,7 +34,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.0"
+APP_VERSION = "v1.2"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -148,17 +155,26 @@ def parse_question_info(uploaded_file: Any) -> Tuple[Dict[str, Any], pd.DataFram
         exam_info["교과목"] = subject
 
     # 총점/선택형/서답형 점수 추출
-    for row in rows[:10]:
-        text = " ".join(clean_text(c) for c in row if clean_text(c))
+    # 나이스 문항정보표는 보통 C6 셀에
+    # "선택형 100.00 점  서답형 0.00 점"과 같은 문구가 들어간다.
+    c6_text = clean_text(rows[5][2]) if len(rows) > 5 and len(rows[5]) > 2 else ""
+    if c6_text:
+        exam_info["문항정보표_C6"] = c6_text
+    scan_texts = [c6_text] + [" ".join(clean_text(c) for c in row if clean_text(c)) for row in rows[:10]]
+    for text in scan_texts:
         m = re.search(r"총점\s*([\d.]+)", text)
         if m:
             exam_info["과목만점"] = float(m.group(1))
-        m = re.search(r"선택형\s*([\d.]+)", text)
+        m = re.search(r"선택형\s*([\d.]+)\s*점", text)
         if m:
             exam_info["선택형만점"] = float(m.group(1))
-        m = re.search(r"서답형\s*([\d.]+)", text)
+        m = re.search(r"서답형\s*([\d.]+)\s*점", text)
         if m:
             exam_info["서답형만점"] = float(m.group(1))
+    if "선택형만점" in exam_info or "서답형만점" in exam_info:
+        exam_info["과목만점"] = float(exam_info.get("선택형만점", 0) or 0) + float(exam_info.get("서답형만점", 0) or 0)
+    if float(exam_info.get("서답형만점", 0) or 0) == 0:
+        exam_info["서답형문항수"] = 0
 
     items: List[Dict[str, Any]] = []
     last_item_idx: Optional[int] = None
@@ -196,6 +212,8 @@ def parse_question_info(uploaded_file: Any) -> Tuple[Dict[str, Any], pd.DataFram
         exam_info["선택형문항수"] = int(qdf["문항번호"].max())
         if "선택형만점" not in exam_info:
             exam_info["선택형만점"] = float(qdf["배점"].fillna(0).sum())
+        if "서답형문항수" not in exam_info:
+            exam_info["서답형문항수"] = 0 if float(exam_info.get("서답형만점", 0) or 0) == 0 else None
     return exam_info, qdf
 
 
@@ -502,7 +520,7 @@ def df_to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
             percent_fmt = writer.book.add_format({"num_format": "0.0%"})
             number_fmt = writer.book.add_format({"num_format": "0.00"})
             for i, col in enumerate(out_df.columns):
-                if "률" in str(col) or "비율" in str(col) or "변별도" in str(col):
+                if is_percent_column(col, out_df[col]):
                     ws.set_column(i, i, 12, percent_fmt)
                 elif any(x in str(col) for x in ["평균", "표준편차", "점수", "최고점", "최저점"]):
                     ws.set_column(i, i, 12, number_fmt)
@@ -569,17 +587,17 @@ def build_overall_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any]) -> str
 {exam}
 
 [성취도 요약]
-{analysis['achievement'].round(3).to_string(index=False)}
+{ai_percent_df(analysis['achievement']).to_string(index=False)}
 검사신뢰도 알파: {None if alpha is None else round(alpha, 3)}
 
 [정답률 낮은 문항 7개]
-{item[['문항번호','평가영역','난이도','배점','정답','정답률','변별도']].head(7).round(3).to_string(index=False)}
+{ai_percent_df(item[['문항번호','평가영역','난이도','배점','정답','정답률','변별도']].head(7)).to_string(index=False)}
 
 [평가영역별 분석]
-{domain.round(3).to_string(index=False)}
+{ai_percent_df(domain).to_string(index=False)}
 
 [성취수준별 문항 분석 중 정답률 낮은 문항]
-{level_item[['문항번호','평가영역','정답률','A','B','C','D','E','수준간격차']].head(10).round(3).to_string(index=False)}
+{ai_percent_df(level_item[['문항번호','평가영역','정답률','A','B','C','D','E','수준간격차']].head(10)).to_string(index=False)}
 
 다음 형식으로 작성하라.
 1. 전체 성취도 요약
@@ -616,7 +634,7 @@ def build_individual_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], stu
 성취수준: {s['성취수준']}
 
 [평가영역별 결과]
-{domain_view.round(3).to_string(index=False)}
+{ai_percent_df(domain_view).to_string(index=False)}
 
 [오답 문항]
 {wrong_view.to_string(index=False)}
@@ -647,17 +665,91 @@ def call_openai(api_key: str, model: str, prompt: str) -> str:
 # Streamlit UI
 # -----------------------------------------------------------------------------
 
-def prepare_parsed(question_file: Any, answer_file: Any) -> ParsedData:
+def uploaded_file_signature(uploaded_file: Any) -> str:
+    data = uploaded_file.getvalue()
+    return hashlib.sha256(data).hexdigest()
+
+
+def bytes_to_uploaded_like(data: bytes) -> io.BytesIO:
+    bio = io.BytesIO(data)
+    bio.seek(0)
+    return bio
+
+
+def prepare_parsed(question_file: Any, answer_files: List[Dict[str, Any]]) -> ParsedData:
     q_exam, qdf = parse_question_info(question_file)
-    a_exam, answer_key_df, sdf = parse_answer_sheet(answer_file)
-    exam_info = merge_exam_info(q_exam, a_exam)
-    validation = make_validation(qdf, answer_key_df)
-    long_df = build_long_data(qdf, sdf)
-    return ParsedData(exam_info=exam_info, question_df=qdf, students_df=sdf, long_df=long_df, validation_df=validation)
+
+    answer_keys: List[pd.DataFrame] = []
+    student_frames: List[pd.DataFrame] = []
+    answer_exam_infos: List[Dict[str, Any]] = []
+    for item in answer_files:
+        a_exam, answer_key_df, sdf = parse_answer_sheet(bytes_to_uploaded_like(item["data"]))
+        answer_exam_infos.append(a_exam)
+        answer_keys.append(answer_key_df.assign(정오표파일=item.get("name", "")))
+        student_frames.append(sdf.assign(원본파일=item.get("name", "")))
+
+    if not student_frames:
+        raise ValueError("학생답 정오표 파일이 없습니다.")
+
+    sdf_all = pd.concat(student_frames, ignore_index=True)
+    # 동일 학생이 중복 업로드된 경우 마지막 업로드본만 남긴다.
+    if "반/번호" in sdf_all.columns:
+        sdf_all = sdf_all.drop_duplicates(subset=["반/번호"], keep="last").sort_values(["반", "번호"]).reset_index(drop=True)
+
+    # 정답/배점 검증은 첫 번째 정오표를 대표 기준으로 삼고,
+    # 여러 파일의 정오표 정답/배점이 서로 다른 경우 별도 검증 행을 추가한다.
+    base_answer_key = answer_keys[0].drop(columns=["정오표파일"], errors="ignore") if answer_keys else pd.DataFrame()
+    validation = make_validation(qdf, base_answer_key)
+    if len(answer_keys) > 1:
+        all_keys = pd.concat(answer_keys, ignore_index=True)
+        key_check = all_keys.groupby("문항번호").agg(
+            정답종류=("정오표_정답", lambda x: len(set(map(str, x.dropna())))),
+            배점종류=("정오표_배점", lambda x: len(set(map(str, x.dropna())))),
+        ).reset_index()
+        diff = key_check[(key_check["정답종류"] > 1) | (key_check["배점종류"] > 1)]
+        if not diff.empty:
+            extra = diff.assign(정답=np.nan, 배점=np.nan, 정오표_정답="파일별 상이", 정오표_배점="파일별 상이", 정답일치=False, 배점일치=False, 검증결과="정오표 파일 간 확인 필요")
+            validation = pd.concat([validation, extra[validation.columns]], ignore_index=True)
+
+    exam_info = q_exam
+    for a_exam in answer_exam_infos:
+        exam_info = merge_exam_info(exam_info, a_exam)
+    exam_info["정오표파일수"] = len(answer_files)
+    exam_info["학생수"] = len(sdf_all)
+
+    long_df = build_long_data(qdf, sdf_all)
+    return ParsedData(exam_info=exam_info, question_df=qdf, students_df=sdf_all, long_df=long_df, validation_df=validation)
 
 
-def fmt_percent_df(df: pd.DataFrame) -> pd.DataFrame:
-    return df.copy()
+def is_percent_column(col: Any, series: Optional[pd.Series] = None) -> bool:
+    """0~1 비율값으로 계산된 컬럼을 화면/엑셀에서 %로 표시하기 위한 판별 함수."""
+    name = str(col)
+    if any(k in name for k in ["률", "비율", "변별도", "수준간격차"]):
+        return True
+    # 성취수준별 문항 분석의 A~E 컬럼은 이름만으로는 비율인지 알기 어려우므로 값 범위로 보조 판별
+    if name in list("ABCDE") and series is not None:
+        nums = pd.to_numeric(series, errors="coerce").dropna()
+        if not nums.empty and nums.between(-1, 1).all():
+            return True
+    return False
+
+
+def percent_columns(df: pd.DataFrame) -> List[Any]:
+    return [col for col in df.columns if is_percent_column(col, df[col])]
+
+
+def fmt_percent_df(df: pd.DataFrame, digits: int = 1) -> pd.DataFrame:
+    """Streamlit 화면 표시용: 내부 0~1 비율값을 '52.3%' 문자열로 변환한다."""
+    out = df.copy()
+    for col in percent_columns(out):
+        nums = pd.to_numeric(out[col], errors="coerce")
+        out[col] = nums.map(lambda x: "" if pd.isna(x) else f"{x * 100:.{digits}f}%")
+    return out
+
+
+def ai_percent_df(df: pd.DataFrame, digits: int = 1) -> pd.DataFrame:
+    """AI 프롬프트용: 비율값을 % 문자열로 변환해 AI가 0.42를 0.42%로 오해하지 않게 한다."""
+    return fmt_percent_df(df, digits=digits)
 
 
 def main() -> None:
@@ -674,44 +766,92 @@ def main() -> None:
             "5. 필요한 경우 OpenAI API 키를 입력해 전체/개별 학생 AI 분석 초안을 생성합니다."
         )
 
+    if "answer_file_store" not in st.session_state:
+        st.session_state.answer_file_store = {}
+
     left, right = st.columns(2)
     with left:
         question_file = st.file_uploader("문항정보표 업로드", type=["xlsx"], key="question_file")
     with right:
-        answer_file = st.file_uploader("학생답 정오표 업로드", type=["xlsx"], key="answer_file")
+        uploaded_answer_files = st.file_uploader(
+            "학생답 정오표 업로드",
+            type=["xlsx"],
+            accept_multiple_files=True,
+            key="answer_files",
+            help="1반 파일을 먼저 올린 뒤 2반 파일을 추가로 올려도 되고, 여러 파일을 한꺼번에 선택해도 됩니다. 같은 파일은 자동으로 중복 제외됩니다.",
+        )
 
-    if not question_file or not answer_file:
-        st.info("문항정보표와 학생답 정오표를 모두 업로드하면 자동 분석을 시작합니다.")
+    added_count = 0
+    duplicate_count = 0
+    for f in uploaded_answer_files or []:
+        sig = uploaded_file_signature(f)
+        if sig in st.session_state.answer_file_store:
+            duplicate_count += 1
+            continue
+        st.session_state.answer_file_store[sig] = {"name": f.name, "size": f.size, "data": f.getvalue()}
+        added_count += 1
+
+    if st.session_state.answer_file_store:
+        with st.expander("업로드된 학생답 정오표 파일", expanded=True):
+            file_view = pd.DataFrame([
+                {"파일명": v["name"], "크기(bytes)": v["size"]}
+                for v in st.session_state.answer_file_store.values()
+            ])
+            st.dataframe(file_view, use_container_width=True, hide_index=True)
+            if added_count:
+                st.success(f"정오표 {added_count}개를 추가했습니다.")
+            if duplicate_count:
+                st.info(f"이미 등록된 정오표 {duplicate_count}개는 중복 제외했습니다.")
+            if st.button("정오표 목록 초기화"):
+                st.session_state.answer_file_store = {}
+                st.rerun()
+
+    answer_files = list(st.session_state.answer_file_store.values())
+
+    if not question_file or not answer_files:
+        st.info("문항정보표와 학생답 정오표를 모두 업로드하면 자동 분석을 시작합니다. 정오표는 여러 개 업로드할 수 있습니다.")
         return
 
     try:
-        parsed = prepare_parsed(question_file, answer_file)
+        parsed = prepare_parsed(question_file, answer_files)
     except Exception as e:
         st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
         st.stop()
 
     st.subheader("1. 자동 인식 결과")
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("교과목", parsed.exam_info.get("교과목", "-"))
     m2.metric("학년/학기", f"{parsed.exam_info.get('학년', '-')}/{parsed.exam_info.get('학기', '-')}")
-    m3.metric("선택형 문항 수", len(parsed.question_df))
-    m4.metric("학생 수", len(parsed.students_df))
+    m3.metric("선택형 문항 수", parsed.exam_info.get("선택형문항수", len(parsed.question_df)))
+    m4.metric("서답형 문항 수", parsed.exam_info.get("서답형문항수", 0) if parsed.exam_info.get("서답형문항수") is not None else "확인 필요")
+    m5.metric("학생 수", len(parsed.students_df))
+    m6.metric("정오표 파일 수", parsed.exam_info.get("정오표파일수", 1))
+
+    s1, s2, s3 = st.columns(3)
+    s1.metric("선택형 만점", parsed.exam_info.get("선택형만점", "-"))
+    s2.metric("서답형 만점", parsed.exam_info.get("서답형만점", "-"))
+    s3.metric("과목 만점", parsed.exam_info.get("과목만점", "-"))
 
     with st.expander("평가정보 자동 인식값 수정", expanded=False):
-        cols = st.columns(5)
+        cols = st.columns(6)
         parsed.exam_info["학년도"] = cols[0].text_input("학년도", parsed.exam_info.get("학년도", "2026"))
         parsed.exam_info["학년"] = cols[1].text_input("학년", parsed.exam_info.get("학년", "1학년"))
         parsed.exam_info["학기"] = cols[2].text_input("학기", parsed.exam_info.get("학기", "1학기"))
         parsed.exam_info["평가구분"] = cols[3].text_input("평가구분", parsed.exam_info.get("평가구분", "중간고사"))
         parsed.exam_info["교과목"] = cols[4].text_input("교과목", parsed.exam_info.get("교과목", "과학"))
+        parsed.exam_info["서답형문항수"] = int(cols[5].number_input("서답형 문항 수", min_value=0, value=int(parsed.exam_info.get("서답형문항수") or 0), step=1))
 
     st.subheader("2. 분석 기준")
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
     cut_a = c1.number_input("A/B 분할점수", value=90.0, step=1.0)
     cut_b = c2.number_input("B/C 분할점수", value=80.0, step=1.0)
     cut_c = c3.number_input("C/D 분할점수", value=70.0, step=1.0)
     cut_d = c4.number_input("D/E 분할점수", value=60.0, step=1.0)
-    total_full_score = c5.number_input("과목 만점", value=float(parsed.exam_info.get("과목만점", parsed.question_df["배점"].fillna(0).sum() or 100.0)), step=1.0)
+    parsed.exam_info["선택형만점"] = c5.number_input("선택형 만점", value=float(parsed.exam_info.get("선택형만점", parsed.question_df["배점"].fillna(0).sum() or 100.0)), step=1.0)
+    parsed.exam_info["서답형만점"] = c6.number_input("서답형 만점", value=float(parsed.exam_info.get("서답형만점", 0.0) or 0.0), step=1.0)
+    default_total = float(parsed.exam_info.get("과목만점", parsed.exam_info["선택형만점"] + parsed.exam_info["서답형만점"]) or 100.0)
+    total_full_score = c7.number_input("과목 만점", value=default_total, step=1.0)
+    parsed.exam_info["과목만점"] = total_full_score
     cuts = {"A": cut_a, "B": cut_b, "C": cut_c, "D": cut_d}
 
     analysis = analyze_all(parsed, total_full_score, cuts)
@@ -741,34 +881,34 @@ def main() -> None:
         a2.metric("표준편차", f"{analysis['achievement'].loc[0, '표준편차']:.2f}")
         a3.metric("최고/최저", f"{analysis['achievement'].loc[0, '최고점']:.1f} / {analysis['achievement'].loc[0, '최저점']:.1f}")
         a4.metric("검사신뢰도 α", "-" if alpha is None else f"{alpha:.3f}")
-        st.dataframe(analysis["achievement"], use_container_width=True)
+        st.dataframe(fmt_percent_df(analysis["achievement"]), use_container_width=True)
         st.markdown("#### 학급별 성취도")
-        st.dataframe(analysis["class_achievement"], use_container_width=True)
+        st.dataframe(fmt_percent_df(analysis["class_achievement"]), use_container_width=True)
 
     with tab2:
         st.markdown("정답률과 변별도를 기준으로 취약 문항을 먼저 확인할 수 있습니다.")
-        st.dataframe(analysis["item"].sort_values("정답률"), use_container_width=True, height=520)
+        st.dataframe(fmt_percent_df(analysis["item"].sort_values("정답률")), use_container_width=True, height=520)
 
     with tab3:
-        st.dataframe(analysis["class_item_pivot"], use_container_width=True, height=520)
+        st.dataframe(fmt_percent_df(analysis["class_item_pivot"]), use_container_width=True, height=520)
         st.markdown("#### 긴 형태 데이터")
-        st.dataframe(analysis["class_item"], use_container_width=True, height=320)
+        st.dataframe(fmt_percent_df(analysis["class_item"]), use_container_width=True, height=320)
 
     with tab4:
-        st.dataframe(analysis["domain"].sort_values("정답률"), use_container_width=True, height=420)
+        st.dataframe(fmt_percent_df(analysis["domain"].sort_values("정답률")), use_container_width=True, height=420)
         st.markdown("#### 학생별 평가영역 점수")
-        st.dataframe(analysis["domain_scores"], use_container_width=True, height=360)
+        st.dataframe(fmt_percent_df(analysis["domain_scores"]), use_container_width=True, height=360)
 
     with tab5:
-        st.dataframe(analysis["level_item"].sort_values("정답률"), use_container_width=True, height=520)
+        st.dataframe(fmt_percent_df(analysis["level_item"].sort_values("정답률")), use_container_width=True, height=520)
 
     with tab6:
         st.markdown("학생 이름은 웹앱 내부 확인용입니다. AI 분석에 보낼 때는 익명화 옵션을 권장합니다.")
-        st.dataframe(analysis["individual"].sort_values(["반", "번호"]), use_container_width=True, height=420)
+        st.dataframe(fmt_percent_df(analysis["individual"].sort_values(["반", "번호"])), use_container_width=True, height=420)
         student_options = analysis["individual"].sort_values(["반", "번호"])["반/번호"].tolist()
         selected_student = st.selectbox("학생 선택", student_options)
         one_long = analysis["long"][analysis["long"]["반/번호"] == selected_student]
-        st.dataframe(one_long[["문항번호", "평가영역", "난이도", "배점", "정답", "원본표시", "선택지", "정오", "점수", "성취기준"]], use_container_width=True, height=360)
+        st.dataframe(fmt_percent_df(one_long[["문항번호", "평가영역", "난이도", "배점", "정답", "원본표시", "선택지", "정오", "점수", "성취기준"]]), use_container_width=True, height=360)
 
     with tab7:
         st.markdown("AI 분석은 선택 기능입니다. 학생 개별 분석을 사용할 때는 개인정보 제공 범위를 반드시 확인하세요.")
