@@ -1,0 +1,821 @@
+# -*- coding: utf-8 -*-
+"""
+성취수준별 평가결과 분석 웹앱 v1.0
+- 나이스 문항정보표 + 학생답 정오표 업로드
+- 자동 파싱/검증/점수 계산
+- 웹앱 내 분석표 확인
+- 확인용 엑셀 및 5종 분석 엑셀 ZIP 다운로드
+- OpenAI API 선택 연동: 전체/학급/개별 학생 분석 초안 생성
+"""
+
+from __future__ import annotations
+
+import io
+import re
+import zipfile
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+from openpyxl import load_workbook
+
+try:
+    from openai import OpenAI
+except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 기능은 계속 사용
+    OpenAI = None
+
+
+APP_VERSION = "v1.0"
+MULTI_CODE_MAP = {
+    "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
+    "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
+    "K": [1, 2, 3], "L": [1, 2, 4], "M": [1, 2, 5], "N": [1, 3, 4],
+    "O": [1, 3, 5], "P": [1, 4, 5], "Q": [2, 3, 4], "R": [2, 3, 5],
+    "S": [2, 4, 5], "T": [3, 4, 5], "U": [1, 2, 3, 4], "V": [1, 2, 3, 5],
+    "W": [1, 2, 4, 5], "X": [1, 3, 4, 5], "Y": [2, 3, 4, 5], "Z": [1, 2, 3, 4, 5],
+}
+
+
+@dataclass
+class ParsedData:
+    exam_info: Dict[str, Any]
+    question_df: pd.DataFrame
+    students_df: pd.DataFrame
+    long_df: pd.DataFrame
+    validation_df: pd.DataFrame
+
+
+# -----------------------------------------------------------------------------
+# 기본 유틸
+# -----------------------------------------------------------------------------
+
+def clean_text(v: Any) -> str:
+    if v is None:
+        return ""
+    text = str(v).replace("\u3000", " ").strip()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def to_number(v: Any) -> Optional[float]:
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)) and not pd.isna(v):
+        return float(v)
+    text = clean_text(v).replace(",", "")
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def to_int_if_possible(v: Any) -> Any:
+    n = to_number(v)
+    if n is None:
+        return clean_text(v)
+    if abs(n - int(n)) < 1e-9:
+        return int(n)
+    return n
+
+
+def is_question_no(v: Any) -> bool:
+    n = to_number(v)
+    return n is not None and abs(n - int(n)) < 1e-9 and 1 <= int(n) <= 300
+
+
+def is_student_id(v: Any) -> bool:
+    return bool(re.match(r"^\d+\s*/\s*\d+$", clean_text(v)))
+
+
+def parse_exam_info_from_text(text: str) -> Dict[str, Any]:
+    info: Dict[str, Any] = {}
+    m = re.search(r"(\d{4})\s*학년도", text) or re.search(r"(\d{4})\s*년도", text)
+    if m:
+        info["학년도"] = m.group(1)
+    m = re.search(r"([1-2])\s*학기", text)
+    if m:
+        info["학기"] = f"{m.group(1)}학기"
+    m = re.search(r"(\d+)\s*학년", text)
+    if m:
+        info["학년"] = f"{m.group(1)}학년"
+    m = re.search(r"(\d+)\s*반", text)
+    if m:
+        info["학급"] = f"{m.group(1)}반"
+    for name in ["중간고사", "기말고사", "1차", "2차", "수행평가"]:
+        if name in text:
+            info["평가구분"] = name
+            break
+    return info
+
+
+def extract_subject_from_question_sheet(rows: List[List[Any]]) -> str:
+    for row in rows[:8]:
+        for cell in row:
+            text = clean_text(cell)
+            m = re.search(r"\(\s*([^()]+?)\s*\)\s*과목", text)
+            if m:
+                return m.group(1).strip()
+    return ""
+
+
+def safe_sheet_name(name: str) -> str:
+    name = re.sub(r"[\\/*?:\[\]]", "_", str(name))[:31]
+    return name or "Sheet"
+
+
+# -----------------------------------------------------------------------------
+# 나이스 원본 파서
+# -----------------------------------------------------------------------------
+
+def read_workbook_rows(uploaded_file: Any) -> List[List[Any]]:
+    uploaded_file.seek(0)
+    wb = load_workbook(uploaded_file, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    rows: List[List[Any]] = []
+    for row in ws.iter_rows(values_only=True):
+        rows.append(list(row))
+    return rows
+
+
+def parse_question_info(uploaded_file: Any) -> Tuple[Dict[str, Any], pd.DataFrame]:
+    rows = read_workbook_rows(uploaded_file)
+    subject = extract_subject_from_question_sheet(rows)
+    all_text = " ".join(clean_text(c) for row in rows[:10] for c in row if clean_text(c))
+    exam_info = parse_exam_info_from_text(all_text)
+    if subject:
+        exam_info["교과목"] = subject
+
+    # 총점/선택형/서답형 점수 추출
+    for row in rows[:10]:
+        text = " ".join(clean_text(c) for c in row if clean_text(c))
+        m = re.search(r"총점\s*([\d.]+)", text)
+        if m:
+            exam_info["과목만점"] = float(m.group(1))
+        m = re.search(r"선택형\s*([\d.]+)", text)
+        if m:
+            exam_info["선택형만점"] = float(m.group(1))
+        m = re.search(r"서답형\s*([\d.]+)", text)
+        if m:
+            exam_info["서답형만점"] = float(m.group(1))
+
+    items: List[Dict[str, Any]] = []
+    last_item_idx: Optional[int] = None
+
+    for row in rows:
+        # A~H열 중심으로 처리: 문항번호, 내용영역, 성취기준, 어려움/보통/쉬움, 배점, 정답
+        c0 = row[0] if len(row) > 0 else None
+        if is_question_no(c0):
+            qno = int(to_number(c0) or 0)
+            difficulty = ""
+            for label, idx in [("어려움", 3), ("보통", 4), ("쉬움", 5)]:
+                if len(row) > idx and "○" in clean_text(row[idx]):
+                    difficulty = label
+            item = {
+                "문항번호": qno,
+                "평가영역": clean_text(row[1] if len(row) > 1 else ""),
+                "성취기준": clean_text(row[2] if len(row) > 2 else ""),
+                "난이도": difficulty,
+                "배점": to_number(row[6] if len(row) > 6 else None),
+                "정답": to_int_if_possible(row[7] if len(row) > 7 else None),
+            }
+            items.append(item)
+            last_item_idx = len(items) - 1
+        else:
+            # 페이지가 나뉘면서 성취기준만 다음 줄에 이어지는 경우 직전 문항에 붙임
+            cont = clean_text(row[2] if len(row) > 2 else "")
+            if last_item_idx is not None and cont and not any(x in cont for x in ["성취기준", "총합계", "비율"]):
+                old = clean_text(items[last_item_idx].get("성취기준", ""))
+                if cont not in old:
+                    items[last_item_idx]["성취기준"] = (old + " " + cont).strip()
+
+    qdf = pd.DataFrame(items).drop_duplicates(subset=["문항번호"], keep="first")
+    if not qdf.empty:
+        qdf = qdf.sort_values("문항번호").reset_index(drop=True)
+        exam_info["선택형문항수"] = int(qdf["문항번호"].max())
+        if "선택형만점" not in exam_info:
+            exam_info["선택형만점"] = float(qdf["배점"].fillna(0).sum())
+    return exam_info, qdf
+
+
+def parse_answer_sheet(uploaded_file: Any) -> Tuple[Dict[str, Any], pd.DataFrame, pd.DataFrame]:
+    rows = read_workbook_rows(uploaded_file)
+    all_text = " ".join(clean_text(c) for row in rows[:8] for c in row if clean_text(c))
+    exam_info = parse_exam_info_from_text(all_text)
+    if "과학" in all_text and "교과목" not in exam_info:
+        exam_info["교과목"] = "과학"
+
+    header_idx = None
+    for i, row in enumerate(rows):
+        if any(clean_text(c) == "번호" for c in row):
+            header_idx = i
+            break
+    if header_idx is None:
+        raise ValueError("학생답 정오표에서 '번호' 행을 찾지 못했습니다.")
+
+    header_row = rows[header_idx]
+    answer_row = rows[header_idx + 1] if header_idx + 1 < len(rows) else []
+    point_row = rows[header_idx + 2] if header_idx + 2 < len(rows) else []
+
+    # 문항번호 열: 실제 문항번호가 들어 있는 열만 수집
+    q_cols: List[Tuple[int, int]] = []
+    for col_idx, v in enumerate(header_row):
+        if is_question_no(v):
+            q_cols.append((col_idx, int(to_number(v) or 0)))
+
+    ans_records = []
+    for col_idx, qno in q_cols:
+        ans_records.append({
+            "문항번호": qno,
+            "정오표_정답": to_int_if_possible(answer_row[col_idx] if col_idx < len(answer_row) else None),
+            "정오표_배점": to_number(point_row[col_idx] if col_idx < len(point_row) else None),
+        })
+    answer_key_df = pd.DataFrame(ans_records)
+
+    extra_cols: Dict[str, int] = {}
+    for col_idx, v in enumerate(header_row):
+        text = clean_text(v)
+        if text in ["선택형점수", "서답형점수", "기타점수", "영역총점", "총점"]:
+            extra_cols[text] = col_idx
+
+    students: List[Dict[str, Any]] = []
+    for row in rows[header_idx + 3:]:
+        if len(row) == 0:
+            continue
+        first = row[0] if len(row) > 0 else None
+        if not is_student_id(first):
+            continue
+        rec: Dict[str, Any] = {
+            "반/번호": clean_text(row[0]),
+            "학번": clean_text(row[1] if len(row) > 1 else ""),
+            "이름": clean_text(row[2] if len(row) > 2 else ""),
+        }
+        m = re.match(r"^(\d+)\s*/\s*(\d+)$", rec["반/번호"])
+        rec["반"] = int(m.group(1)) if m else None
+        rec["번호"] = int(m.group(2)) if m else None
+        for col_idx, qno in q_cols:
+            rec[f"문항{qno:02d}"] = clean_text(row[col_idx] if col_idx < len(row) else "")
+        for name, col_idx in extra_cols.items():
+            rec[name] = to_number(row[col_idx] if col_idx < len(row) else None)
+        students.append(rec)
+
+    sdf = pd.DataFrame(students)
+    return exam_info, answer_key_df, sdf
+
+
+# -----------------------------------------------------------------------------
+# 계산/분석
+# -----------------------------------------------------------------------------
+
+def merge_exam_info(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(a)
+    for k, v in b.items():
+        if k not in merged or merged[k] in [None, ""]:
+            merged[k] = v
+    if "평가구분" not in merged:
+        merged["평가구분"] = "정기고사"
+    return merged
+
+
+def make_validation(qdf: pd.DataFrame, answer_key_df: pd.DataFrame) -> pd.DataFrame:
+    if qdf.empty or answer_key_df.empty:
+        return pd.DataFrame()
+    vdf = qdf[["문항번호", "정답", "배점"]].merge(answer_key_df, on="문항번호", how="outer")
+    vdf["정답일치"] = vdf["정답"].astype(str) == vdf["정오표_정답"].astype(str)
+    vdf["배점일치"] = np.isclose(pd.to_numeric(vdf["배점"], errors="coerce"), pd.to_numeric(vdf["정오표_배점"], errors="coerce"), equal_nan=True)
+    vdf["검증결과"] = np.where(vdf["정답일치"] & vdf["배점일치"], "정상", "확인 필요")
+    return vdf
+
+
+def classify_level(score: float, cut_a: float, cut_b: float, cut_c: float, cut_d: float) -> str:
+    if score >= cut_a:
+        return "A"
+    if score >= cut_b:
+        return "B"
+    if score >= cut_c:
+        return "C"
+    if score >= cut_d:
+        return "D"
+    return "E"
+
+
+def build_long_data(qdf: pd.DataFrame, sdf: pd.DataFrame) -> pd.DataFrame:
+    qmap = qdf.set_index("문항번호").to_dict(orient="index")
+    rows = []
+    for _, s in sdf.iterrows():
+        for qno, q in qmap.items():
+            raw = clean_text(s.get(f"문항{int(qno):02d}", ""))
+            correct_answer = q.get("정답")
+            point = float(q.get("배점") or 0)
+            is_correct = raw == "."
+            if is_correct:
+                selected = correct_answer
+                status = "정답"
+                score = point
+            elif raw == "-" or raw == "":
+                selected = "무표기"
+                status = "무표기"
+                score = 0.0
+            elif raw.upper() in MULTI_CODE_MAP:
+                selected = ",".join(map(str, MULTI_CODE_MAP[raw.upper()]))
+                status = "복수답안오답"
+                score = 0.0
+            else:
+                selected = to_int_if_possible(raw)
+                status = "오답"
+                score = 0.0
+            rows.append({
+                "반/번호": s.get("반/번호"), "반": s.get("반"), "번호": s.get("번호"),
+                "학번": s.get("학번"), "이름": s.get("이름"), "문항번호": int(qno),
+                "평가영역": q.get("평가영역"), "성취기준": q.get("성취기준"), "난이도": q.get("난이도"),
+                "배점": point, "정답": correct_answer, "원본표시": raw, "선택지": selected,
+                "정오": status, "정답여부": is_correct, "점수": score,
+            })
+    return pd.DataFrame(rows)
+
+
+def add_student_scores(sdf: pd.DataFrame, long_df: pd.DataFrame, total_full_score: float, cuts: Dict[str, float]) -> pd.DataFrame:
+    score_df = long_df.groupby("반/번호", as_index=False)["점수"].sum().rename(columns={"점수": "계산점수"})
+    out = sdf.merge(score_df, on="반/번호", how="left")
+    out["계산점수"] = out["계산점수"].fillna(0)
+    if "영역총점" in out.columns:
+        out["원본총점"] = out["영역총점"]
+        out["점수차이"] = out["계산점수"] - out["원본총점"].fillna(0)
+    out["환산점수"] = out["계산점수"] / total_full_score * 100 if total_full_score else out["계산점수"]
+    out["성취수준"] = out["환산점수"].apply(lambda x: classify_level(float(x), cuts["A"], cuts["B"], cuts["C"], cuts["D"]))
+    return out
+
+
+def calc_cronbach_alpha(long_df: pd.DataFrame) -> Optional[float]:
+    if long_df.empty:
+        return None
+    pivot = long_df.pivot_table(index="반/번호", columns="문항번호", values="점수", aggfunc="sum", fill_value=0)
+    k = pivot.shape[1]
+    n = pivot.shape[0]
+    if k <= 1 or n <= 1:
+        return None
+    item_var_sum = pivot.var(axis=0, ddof=1).sum()
+    total_var = pivot.sum(axis=1).var(ddof=1)
+    if total_var == 0 or pd.isna(total_var):
+        return None
+    return float(k / (k - 1) * (1 - item_var_sum / total_var))
+
+
+def item_discrimination(long_df: pd.DataFrame, student_scores: pd.DataFrame) -> pd.DataFrame:
+    scores = student_scores[["반/번호", "환산점수"]].dropna().sort_values("환산점수", ascending=False)
+    n = len(scores)
+    if n < 4:
+        return pd.DataFrame({"문항번호": sorted(long_df["문항번호"].unique()), "변별도": np.nan})
+    group_n = max(1, int(round(n * 0.27)))
+    high_ids = set(scores.head(group_n)["반/번호"])
+    low_ids = set(scores.tail(group_n)["반/번호"])
+    rows = []
+    for qno, g in long_df.groupby("문항번호"):
+        high_rate = g[g["반/번호"].isin(high_ids)]["정답여부"].mean()
+        low_rate = g[g["반/번호"].isin(low_ids)]["정답여부"].mean()
+        rows.append({"문항번호": qno, "상위집단정답률": high_rate, "하위집단정답률": low_rate, "변별도": high_rate - low_rate})
+    return pd.DataFrame(rows)
+
+
+def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, float]) -> Dict[str, pd.DataFrame | float | None]:
+    qdf, sdf0, long_df0 = parsed.question_df.copy(), parsed.students_df.copy(), parsed.long_df.copy()
+    students = add_student_scores(sdf0, long_df0, total_full_score, cuts)
+    long_df = long_df0.merge(students[["반/번호", "환산점수", "성취수준"]], on="반/번호", how="left")
+
+    # 성취도 분석
+    level_counts = students["성취수준"].value_counts().reindex(list("ABCDE"), fill_value=0)
+    achievement = pd.DataFrame({
+        "구분": ["전체"],
+        "응시자수": [len(students)],
+        "평균": [students["환산점수"].mean()],
+        "표준편차": [students["환산점수"].std(ddof=1)],
+        "최고점": [students["환산점수"].max()],
+        "최저점": [students["환산점수"].min()],
+        "A인원": [level_counts["A"]], "B인원": [level_counts["B"]], "C인원": [level_counts["C"]],
+        "D인원": [level_counts["D"]], "E인원": [level_counts["E"]],
+    })
+    class_achievement = students.groupby("반", dropna=False).agg(
+        응시자수=("반/번호", "count"), 평균=("환산점수", "mean"), 표준편차=("환산점수", "std"),
+        최고점=("환산점수", "max"), 최저점=("환산점수", "min")
+    ).reset_index()
+    for level in list("ABCDE"):
+        cnt = students[students["성취수준"] == level].groupby("반")["반/번호"].count()
+        class_achievement[f"{level}인원"] = class_achievement["반"].map(cnt).fillna(0).astype(int)
+
+    # 문항별 분석
+    item = long_df.groupby("문항번호").agg(
+        배점=("배점", "first"), 정답=("정답", "first"), 평가영역=("평가영역", "first"), 난이도=("난이도", "first"),
+        응시자수=("반/번호", "count"), 정답자수=("정답여부", "sum"), 평균점수=("점수", "mean")
+    ).reset_index()
+    item["정답률"] = item["정답자수"] / item["응시자수"]
+    item = item.merge(item_discrimination(long_df, students), on="문항번호", how="left")
+    # 선택지 반응률
+    for opt in [1, 2, 3, 4, 5, "무표기"]:
+        col = f"선택지{opt}비율" if opt != "무표기" else "무표기비율"
+        rates = long_df.assign(_sel=long_df["선택지"].astype(str)).groupby("문항번호").apply(lambda g, o=str(opt): (g["_sel"] == o).mean()).reset_index(name=col)
+        item = item.merge(rates, on="문항번호", how="left")
+
+    # 학급별 분석
+    class_item = long_df.groupby(["반", "문항번호"]).agg(응시자수=("반/번호", "count"), 정답률=("정답여부", "mean"), 평균점수=("점수", "mean")).reset_index()
+    class_item_pivot = class_item.pivot(index="문항번호", columns="반", values="정답률").reset_index()
+    class_item_pivot.columns = ["문항번호"] + [f"{int(c)}반_정답률" if not pd.isna(c) else "미상반_정답률" for c in class_item_pivot.columns[1:]]
+
+    # 평가영역별 분석
+    # 영역 만점은 문항정보표 기준으로 문항 배점을 합산하고,
+    # 영역 평균은 학생별 영역 총점의 평균으로 계산한다.
+    domain_scores = long_df.groupby(["반/번호", "평가영역"]).agg(
+        영역점수=("점수", "sum"),
+        영역배점=("배점", "sum"),
+        영역정답률=("정답여부", "mean"),
+    ).reset_index()
+    domain_max = qdf.groupby("평가영역", dropna=False).agg(
+        문항수=("문항번호", "nunique"),
+        배점합계=("배점", "sum"),
+    ).reset_index()
+    domain_avg = domain_scores.groupby("평가영역", dropna=False).agg(
+        평균점수=("영역점수", "mean"),
+        평균정답률=("영역정답률", "mean"),
+    ).reset_index()
+    domain_rate = long_df.groupby("평가영역", dropna=False).agg(정답률=("정답여부", "mean")).reset_index()
+    domain = domain_max.merge(domain_avg, on="평가영역", how="left").merge(domain_rate, on="평가영역", how="left")
+    domain["환산평균"] = np.where(domain["배점합계"] > 0, domain["평균점수"] / domain["배점합계"] * 100, np.nan)
+
+    # 성취수준별 문항 분석
+    level_item = long_df.groupby(["성취수준", "문항번호"]).agg(응시자수=("반/번호", "count"), 정답률=("정답여부", "mean")).reset_index()
+    level_item_pivot = level_item.pivot(index="문항번호", columns="성취수준", values="정답률").reset_index()
+    for level in list("ABCDE"):
+        if level not in level_item_pivot.columns:
+            level_item_pivot[level] = np.nan
+    level_item_pivot = level_item_pivot[["문항번호", "A", "B", "C", "D", "E"]]
+    level_item_pivot = item[["문항번호", "정답률", "평가영역"]].merge(level_item_pivot, on="문항번호", how="left")
+    level_item_pivot["수준간격차"] = level_item_pivot[["A", "B", "C", "D", "E"]].max(axis=1) - level_item_pivot[["A", "B", "C", "D", "E"]].min(axis=1)
+
+    # 학생 개별 분석용 요약
+    individual = students[["반/번호", "반", "번호", "이름", "계산점수", "환산점수", "성취수준"]].copy()
+    weak_items = long_df[~long_df["정답여부"]].groupby("반/번호")["문항번호"].apply(lambda s: ", ".join(map(str, sorted(s.tolist())))).reset_index(name="오답문항")
+    individual = individual.merge(weak_items, on="반/번호", how="left")
+    individual["오답문항"] = individual["오답문항"].fillna("")
+
+    alpha = calc_cronbach_alpha(long_df)
+    return {
+        "students": students,
+        "long": long_df,
+        "achievement": achievement,
+        "class_achievement": class_achievement,
+        "item": item,
+        "class_item": class_item,
+        "class_item_pivot": class_item_pivot,
+        "domain": domain,
+        "level_item": level_item_pivot,
+        "domain_scores": domain_scores,
+        "individual": individual,
+        "alpha": alpha,
+    }
+
+
+# -----------------------------------------------------------------------------
+# 엑셀 출력
+# -----------------------------------------------------------------------------
+
+def autosize_worksheet(writer: pd.ExcelWriter, sheet_name: str, df: pd.DataFrame) -> None:
+    ws = writer.sheets[sheet_name]
+    for idx, col in enumerate(df.columns):
+        max_len = max([len(str(col))] + [len(str(v)) for v in df[col].head(300).fillna("")])
+        ws.set_column(idx, idx, min(max(max_len + 2, 10), 45))
+    header_fmt = writer.book.add_format({"bold": True, "bg_color": "#E8F0FE", "border": 1, "align": "center"})
+    for col_num, value in enumerate(df.columns.values):
+        ws.write(0, col_num, value, header_fmt)
+    ws.freeze_panes(1, 0)
+
+
+def df_to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        for name, df in sheets.items():
+            safe = safe_sheet_name(name)
+            out_df = df.copy()
+            # 보기 좋게 비율 컬럼은 0~1 그대로 저장하되 서식 적용
+            out_df.to_excel(writer, index=False, sheet_name=safe)
+            autosize_worksheet(writer, safe, out_df)
+            ws = writer.sheets[safe]
+            percent_fmt = writer.book.add_format({"num_format": "0.0%"})
+            number_fmt = writer.book.add_format({"num_format": "0.00"})
+            for i, col in enumerate(out_df.columns):
+                if "률" in str(col) or "비율" in str(col) or "변별도" in str(col):
+                    ws.set_column(i, i, 12, percent_fmt)
+                elif any(x in str(col) for x in ["평균", "표준편차", "점수", "최고점", "최저점"]):
+                    ws.set_column(i, i, 12, number_fmt)
+    return output.getvalue()
+
+
+def make_confirm_excel(parsed: ParsedData, analysis: Dict[str, Any]) -> bytes:
+    sheets = {
+        "평가정보": pd.DataFrame([parsed.exam_info]),
+        "문항정보": parsed.question_df,
+        "학생정오표": parsed.students_df,
+        "학생점수": analysis["students"],
+        "검증결과": parsed.validation_df,
+        "문항별긴자료": analysis["long"],
+    }
+    return df_to_excel_bytes(sheets)
+
+
+def make_analysis_zip(parsed: ParsedData, analysis: Dict[str, Any]) -> bytes:
+    files = {
+        "성취도분석.xlsx": {
+            "전체": analysis["achievement"],
+            "학급별": analysis["class_achievement"],
+            "학생별": analysis["individual"],
+        },
+        "선다형분석_문항별.xlsx": {
+            "문항별분석": analysis["item"],
+            "응답긴자료": analysis["long"],
+        },
+        "선다형분석_학급별.xlsx": {
+            "학급별문항": analysis["class_item"],
+            "문항별학급비교": analysis["class_item_pivot"],
+        },
+        "평가영역별분석.xlsx": {
+            "영역별분석": analysis["domain"],
+            "학생영역별": analysis["domain_scores"],
+        },
+        "선다형분석_성취수준별.xlsx": {
+            "성취수준별문항": analysis["level_item"],
+        },
+    }
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for filename, sheets in files.items():
+            zf.writestr(filename, df_to_excel_bytes(sheets))
+    return zip_buf.getvalue()
+
+
+# -----------------------------------------------------------------------------
+# AI 분석
+# -----------------------------------------------------------------------------
+
+def build_overall_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any]) -> str:
+    item = analysis["item"].copy().sort_values("정답률")
+    domain = analysis["domain"].copy().sort_values("정답률")
+    level_item = analysis["level_item"].copy().sort_values("정답률")
+    alpha = analysis.get("alpha")
+    exam = parsed.exam_info
+    return f"""
+너는 중학교 과학 교사의 평가 결과 분석을 돕는 전문가다.
+아래 데이터만 근거로 평가 결과를 해석하라. 학생 개인정보는 다루지 말고, 전체/문항/영역/성취수준 관점으로 작성하라.
+
+[평가 정보]
+{exam}
+
+[성취도 요약]
+{analysis['achievement'].round(3).to_string(index=False)}
+검사신뢰도 알파: {None if alpha is None else round(alpha, 3)}
+
+[정답률 낮은 문항 7개]
+{item[['문항번호','평가영역','난이도','배점','정답','정답률','변별도']].head(7).round(3).to_string(index=False)}
+
+[평가영역별 분석]
+{domain.round(3).to_string(index=False)}
+
+[성취수준별 문항 분석 중 정답률 낮은 문항]
+{level_item[['문항번호','평가영역','정답률','A','B','C','D','E','수준간격차']].head(10).round(3).to_string(index=False)}
+
+다음 형식으로 작성하라.
+1. 전체 성취도 요약
+2. 취약 문항 및 가능 원인
+3. 취약 평가영역과 성취기준 관점 해석
+4. 성취수준별 특징
+5. 다음 수업/피드백 제안
+문장은 교사용 평가협의 자료처럼 담백하고 근거 중심으로 작성하라.
+""".strip()
+
+
+def build_individual_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], student_key: str, anonymize: bool = True) -> str:
+    students = analysis["students"]
+    long_df = analysis["long"]
+    domain_scores = analysis["domain_scores"]
+    one = students[students["반/번호"] == student_key]
+    if one.empty:
+        raise ValueError("학생을 찾지 못했습니다.")
+    s = one.iloc[0]
+    student_label = f"{s['반/번호']} 학생" if anonymize else f"{s['반/번호']} {s['이름']} 학생"
+    wrong = long_df[(long_df["반/번호"] == student_key) & (~long_df["정답여부"])].copy()
+    wrong_view = wrong[["문항번호", "평가영역", "난이도", "배점", "정답", "선택지", "성취기준"]].head(20)
+    domain_view = domain_scores[domain_scores["반/번호"] == student_key][["평가영역", "영역점수", "영역배점", "영역정답률"]]
+    return f"""
+너는 중학교 과학 교사의 학생별 평가 피드백 작성을 돕는 전문가다.
+아래 데이터만 근거로 개별 학생의 학습 특성을 해석하라. 단정적 진단, 인성 평가, 과도한 추측은 금지한다.
+
+[학생]
+{student_label}
+
+[점수 요약]
+계산점수: {round(float(s['계산점수']), 2)}점
+환산점수: {round(float(s['환산점수']), 2)}점
+성취수준: {s['성취수준']}
+
+[평가영역별 결과]
+{domain_view.round(3).to_string(index=False)}
+
+[오답 문항]
+{wrong_view.to_string(index=False)}
+
+다음 형식으로 작성하라.
+1. 강점으로 볼 수 있는 부분
+2. 보완이 필요한 평가영역
+3. 오답 문항에서 드러나는 학습 점검 지점
+4. 학생에게 제공할 수 있는 피드백 문장 3개
+학생 이름을 직접 쓰지 말고, '해당 학생' 또는 '학생'으로 표현하라.
+""".strip()
+
+
+def call_openai(api_key: str, model: str, prompt: str) -> str:
+    if OpenAI is None:
+        raise RuntimeError("openai 라이브러리를 불러오지 못했습니다. requirements.txt에 openai가 포함되어 있는지 확인하세요.")
+    client = OpenAI(api_key=api_key)
+    # Responses API 사용: max_tokens 대신 max_output_tokens 사용
+    resp = client.responses.create(
+        model=model,
+        input=prompt,
+        max_output_tokens=1800,
+    )
+    return getattr(resp, "output_text", "").strip()
+
+
+# -----------------------------------------------------------------------------
+# Streamlit UI
+# -----------------------------------------------------------------------------
+
+def prepare_parsed(question_file: Any, answer_file: Any) -> ParsedData:
+    q_exam, qdf = parse_question_info(question_file)
+    a_exam, answer_key_df, sdf = parse_answer_sheet(answer_file)
+    exam_info = merge_exam_info(q_exam, a_exam)
+    validation = make_validation(qdf, answer_key_df)
+    long_df = build_long_data(qdf, sdf)
+    return ParsedData(exam_info=exam_info, question_df=qdf, students_df=sdf, long_df=long_df, validation_df=validation)
+
+
+def fmt_percent_df(df: pd.DataFrame) -> pd.DataFrame:
+    return df.copy()
+
+
+def main() -> None:
+    st.set_page_config(page_title="성취수준별 평가결과 분석 웹앱", layout="wide")
+    st.title("성취수준별 평가결과 분석 웹앱")
+    st.caption(f"{APP_VERSION} · 나이스 문항정보표/학생답 정오표 자동 분석")
+
+    with st.expander("사용 흐름", expanded=False):
+        st.markdown(
+            "1. 문항정보표와 학생답 정오표를 업로드합니다.\n"
+            "2. 앱이 문항정보, 정답, 배점, 학생 정오표를 자동 인식합니다.\n"
+            "3. 성취수준 분할점수를 확인하고 분석 결과를 웹에서 먼저 봅니다.\n"
+            "4. 확인용 엑셀과 5종 분석 엑셀 ZIP을 다운로드합니다.\n"
+            "5. 필요한 경우 OpenAI API 키를 입력해 전체/개별 학생 AI 분석 초안을 생성합니다."
+        )
+
+    left, right = st.columns(2)
+    with left:
+        question_file = st.file_uploader("문항정보표 업로드", type=["xlsx"], key="question_file")
+    with right:
+        answer_file = st.file_uploader("학생답 정오표 업로드", type=["xlsx"], key="answer_file")
+
+    if not question_file or not answer_file:
+        st.info("문항정보표와 학생답 정오표를 모두 업로드하면 자동 분석을 시작합니다.")
+        return
+
+    try:
+        parsed = prepare_parsed(question_file, answer_file)
+    except Exception as e:
+        st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
+        st.stop()
+
+    st.subheader("1. 자동 인식 결과")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("교과목", parsed.exam_info.get("교과목", "-"))
+    m2.metric("학년/학기", f"{parsed.exam_info.get('학년', '-')}/{parsed.exam_info.get('학기', '-')}")
+    m3.metric("선택형 문항 수", len(parsed.question_df))
+    m4.metric("학생 수", len(parsed.students_df))
+
+    with st.expander("평가정보 자동 인식값 수정", expanded=False):
+        cols = st.columns(5)
+        parsed.exam_info["학년도"] = cols[0].text_input("학년도", parsed.exam_info.get("학년도", "2026"))
+        parsed.exam_info["학년"] = cols[1].text_input("학년", parsed.exam_info.get("학년", "1학년"))
+        parsed.exam_info["학기"] = cols[2].text_input("학기", parsed.exam_info.get("학기", "1학기"))
+        parsed.exam_info["평가구분"] = cols[3].text_input("평가구분", parsed.exam_info.get("평가구분", "중간고사"))
+        parsed.exam_info["교과목"] = cols[4].text_input("교과목", parsed.exam_info.get("교과목", "과학"))
+
+    st.subheader("2. 분석 기준")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    cut_a = c1.number_input("A/B 분할점수", value=90.0, step=1.0)
+    cut_b = c2.number_input("B/C 분할점수", value=80.0, step=1.0)
+    cut_c = c3.number_input("C/D 분할점수", value=70.0, step=1.0)
+    cut_d = c4.number_input("D/E 분할점수", value=60.0, step=1.0)
+    total_full_score = c5.number_input("과목 만점", value=float(parsed.exam_info.get("과목만점", parsed.question_df["배점"].fillna(0).sum() or 100.0)), step=1.0)
+    cuts = {"A": cut_a, "B": cut_b, "C": cut_c, "D": cut_d}
+
+    analysis = analyze_all(parsed, total_full_score, cuts)
+
+    warn_df = parsed.validation_df[parsed.validation_df["검증결과"] == "확인 필요"] if not parsed.validation_df.empty else pd.DataFrame()
+    if warn_df.empty:
+        st.success("문항정보표와 학생답 정오표의 정답/배점 검증 결과가 정상입니다.")
+    else:
+        st.warning("문항정보표와 학생답 정오표의 정답/배점이 다른 문항이 있습니다. 검증결과 탭에서 확인하세요.")
+
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "데이터 확인", "성취도 분석", "문항별 분석", "학급별 분석", "평가영역별 분석", "성취수준별 분석", "학생 개별", "AI 분석"
+    ])
+
+    with tab0:
+        st.markdown("#### 문항정보")
+        st.dataframe(parsed.question_df, use_container_width=True, height=260)
+        st.markdown("#### 학생 정오표")
+        st.dataframe(parsed.students_df, use_container_width=True, height=260)
+        st.markdown("#### 검증결과")
+        st.dataframe(parsed.validation_df, use_container_width=True, height=220)
+
+    with tab1:
+        alpha = analysis.get("alpha")
+        a1, a2, a3, a4 = st.columns(4)
+        a1.metric("평균", f"{analysis['achievement'].loc[0, '평균']:.2f}")
+        a2.metric("표준편차", f"{analysis['achievement'].loc[0, '표준편차']:.2f}")
+        a3.metric("최고/최저", f"{analysis['achievement'].loc[0, '최고점']:.1f} / {analysis['achievement'].loc[0, '최저점']:.1f}")
+        a4.metric("검사신뢰도 α", "-" if alpha is None else f"{alpha:.3f}")
+        st.dataframe(analysis["achievement"], use_container_width=True)
+        st.markdown("#### 학급별 성취도")
+        st.dataframe(analysis["class_achievement"], use_container_width=True)
+
+    with tab2:
+        st.markdown("정답률과 변별도를 기준으로 취약 문항을 먼저 확인할 수 있습니다.")
+        st.dataframe(analysis["item"].sort_values("정답률"), use_container_width=True, height=520)
+
+    with tab3:
+        st.dataframe(analysis["class_item_pivot"], use_container_width=True, height=520)
+        st.markdown("#### 긴 형태 데이터")
+        st.dataframe(analysis["class_item"], use_container_width=True, height=320)
+
+    with tab4:
+        st.dataframe(analysis["domain"].sort_values("정답률"), use_container_width=True, height=420)
+        st.markdown("#### 학생별 평가영역 점수")
+        st.dataframe(analysis["domain_scores"], use_container_width=True, height=360)
+
+    with tab5:
+        st.dataframe(analysis["level_item"].sort_values("정답률"), use_container_width=True, height=520)
+
+    with tab6:
+        st.markdown("학생 이름은 웹앱 내부 확인용입니다. AI 분석에 보낼 때는 익명화 옵션을 권장합니다.")
+        st.dataframe(analysis["individual"].sort_values(["반", "번호"]), use_container_width=True, height=420)
+        student_options = analysis["individual"].sort_values(["반", "번호"])["반/번호"].tolist()
+        selected_student = st.selectbox("학생 선택", student_options)
+        one_long = analysis["long"][analysis["long"]["반/번호"] == selected_student]
+        st.dataframe(one_long[["문항번호", "평가영역", "난이도", "배점", "정답", "원본표시", "선택지", "정오", "점수", "성취기준"]], use_container_width=True, height=360)
+
+    with tab7:
+        st.markdown("AI 분석은 선택 기능입니다. 학생 개별 분석을 사용할 때는 개인정보 제공 범위를 반드시 확인하세요.")
+        api_key = st.text_input("OpenAI API Key", type="password")
+        model = st.text_input("모델", value="gpt-4o-mini")
+        mode = st.radio("분석 유형", ["전체 평가 분석", "학생 개별 분석"], horizontal=True)
+        anonymize = st.checkbox("학생 개별 분석에서 이름을 API로 보내지 않기", value=True)
+        if mode == "학생 개별 분석":
+            student_options = analysis["individual"].sort_values(["반", "번호"])["반/번호"].tolist()
+            ai_student = st.selectbox("AI 분석 대상 학생", student_options, key="ai_student")
+            prompt = build_individual_ai_prompt(parsed, analysis, ai_student, anonymize=anonymize)
+        else:
+            prompt = build_overall_ai_prompt(parsed, analysis)
+        with st.expander("AI에 전달될 요약 데이터/프롬프트 확인", expanded=False):
+            st.text_area("프롬프트", prompt, height=360)
+        if st.button("AI 분석 생성", type="primary"):
+            if not api_key:
+                st.error("OpenAI API Key를 입력하세요.")
+            else:
+                with st.spinner("AI 분석을 생성하는 중입니다..."):
+                    try:
+                        result = call_openai(api_key, model, prompt)
+                        st.markdown("#### AI 분석 결과")
+                        st.write(result)
+                        st.download_button("AI 분석 결과 TXT 다운로드", result.encode("utf-8-sig"), "AI_분석결과.txt", "text/plain")
+                    except Exception as e:
+                        st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
+
+    st.subheader("3. 다운로드")
+    d1, d2 = st.columns(2)
+    confirm_bytes = make_confirm_excel(parsed, analysis)
+    zip_bytes = make_analysis_zip(parsed, analysis)
+    d1.download_button(
+        "확인용 엑셀 다운로드",
+        confirm_bytes,
+        file_name="확인용_분석입력자료.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+    d2.download_button(
+        "5종 분석 엑셀 ZIP 다운로드",
+        zip_bytes,
+        file_name="성취수준별_평가결과_분석_5종.zip",
+        mime="application/zip",
+        use_container_width=True,
+    )
+
+
+if __name__ == "__main__":
+    main()
