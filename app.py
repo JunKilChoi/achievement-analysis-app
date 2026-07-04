@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.2
+성취수준별 평가결과 분석 웹앱 v1.3
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
 - v1.2: 화면·AI 프롬프트·엑셀 출력의 정답률/비율/변별도/수준간격차를 % 기준으로 표시
+- v1.3: 표 화면/엑셀 출력에서 비율값은 52.3%처럼 데이터에 %를 포함하고, 헤더에 (명)/(점)/(%) 단위 표시
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -34,7 +35,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.2"
+APP_VERSION = "v1.3"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -512,18 +513,18 @@ def df_to_excel_bytes(sheets: Dict[str, pd.DataFrame]) -> bytes:
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         for name, df in sheets.items():
             safe = safe_sheet_name(name)
-            out_df = df.copy()
-            # 보기 좋게 비율 컬럼은 0~1 그대로 저장하되 서식 적용
+            out_df = format_output_df(df, add_units=True)
             out_df.to_excel(writer, index=False, sheet_name=safe)
             autosize_worksheet(writer, safe, out_df)
             ws = writer.sheets[safe]
-            percent_fmt = writer.book.add_format({"num_format": "0.0%"})
             number_fmt = writer.book.add_format({"num_format": "0.00"})
+            integer_fmt = writer.book.add_format({"num_format": "0"})
             for i, col in enumerate(out_df.columns):
-                if is_percent_column(col, out_df[col]):
-                    ws.set_column(i, i, 12, percent_fmt)
-                elif any(x in str(col) for x in ["평균", "표준편차", "점수", "최고점", "최저점"]):
+                col_name = str(col)
+                if any(unit in col_name for unit in ["(점)"]):
                     ws.set_column(i, i, 12, number_fmt)
+                elif any(unit in col_name for unit in ["(명)", "(개)"]):
+                    ws.set_column(i, i, 10, integer_fmt)
     return output.getvalue()
 
 
@@ -738,18 +739,59 @@ def percent_columns(df: pd.DataFrame) -> List[Any]:
     return [col for col in df.columns if is_percent_column(col, df[col])]
 
 
-def fmt_percent_df(df: pd.DataFrame, digits: int = 1) -> pd.DataFrame:
-    """Streamlit 화면 표시용: 내부 0~1 비율값을 '52.3%' 문자열로 변환한다."""
+def unit_for_column(col: Any, series: Optional[pd.Series] = None) -> str:
+    """표 출력용 헤더 단위. 내부 계산용 컬럼명은 유지하고 출력 직전에만 붙인다."""
+    name = str(col)
+    if is_percent_column(col, series):
+        return "%"
+    if name in ["응시자수", "정답자수"] or name.endswith("인원"):
+        return "명"
+    if name in ["문항수"]:
+        return "개"
+    # 표준편차는 요청에 따라 단위를 붙이지 않는다.
+    if "표준편차" in name:
+        return ""
+    score_keywords = [
+        "평균", "최고점", "최저점", "점수", "배점", "만점", "총점", "환산평균",
+        "영역점수", "영역배점", "배점합계", "계산점수", "환산점수", "평균점수"
+    ]
+    if any(k in name for k in score_keywords):
+        return "점"
+    return ""
+
+
+def add_unit_headers(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    rename_map = {}
+    for col in out.columns:
+        name = str(col)
+        if re.search(r"\([%명점개]\)$", name):
+            continue
+        unit = unit_for_column(col, out[col])
+        if unit:
+            rename_map[col] = f"{name}({unit})"
+    return out.rename(columns=rename_map)
+
+
+def format_output_df(df: pd.DataFrame, digits: int = 1, add_units: bool = True) -> pd.DataFrame:
+    """화면/엑셀/AI 출력용: 비율값은 문자열 %로 보존하고 헤더에는 단위를 붙인다."""
     out = df.copy()
     for col in percent_columns(out):
         nums = pd.to_numeric(out[col], errors="coerce")
         out[col] = nums.map(lambda x: "" if pd.isna(x) else f"{x * 100:.{digits}f}%")
+    if add_units:
+        out = add_unit_headers(out)
     return out
 
 
+def fmt_percent_df(df: pd.DataFrame, digits: int = 1) -> pd.DataFrame:
+    """Streamlit 화면 표시용: 데이터에 %를 포함하고 헤더에 단위를 붙인다."""
+    return format_output_df(df, digits=digits, add_units=True)
+
+
 def ai_percent_df(df: pd.DataFrame, digits: int = 1) -> pd.DataFrame:
-    """AI 프롬프트용: 비율값을 % 문자열로 변환해 AI가 0.42를 0.42%로 오해하지 않게 한다."""
-    return fmt_percent_df(df, digits=digits)
+    """AI 프롬프트용: 비율값을 % 문자열로 변환하고 단위 헤더를 붙인다."""
+    return format_output_df(df, digits=digits, add_units=True)
 
 
 def main() -> None:
@@ -877,9 +919,9 @@ def main() -> None:
     with tab1:
         alpha = analysis.get("alpha")
         a1, a2, a3, a4 = st.columns(4)
-        a1.metric("평균", f"{analysis['achievement'].loc[0, '평균']:.2f}")
+        a1.metric("평균(점)", f"{analysis['achievement'].loc[0, '평균']:.2f}")
         a2.metric("표준편차", f"{analysis['achievement'].loc[0, '표준편차']:.2f}")
-        a3.metric("최고/최저", f"{analysis['achievement'].loc[0, '최고점']:.1f} / {analysis['achievement'].loc[0, '최저점']:.1f}")
+        a3.metric("최고/최저(점)", f"{analysis['achievement'].loc[0, '최고점']:.1f} / {analysis['achievement'].loc[0, '최저점']:.1f}")
         a4.metric("검사신뢰도 α", "-" if alpha is None else f"{alpha:.3f}")
         st.dataframe(fmt_percent_df(analysis["achievement"]), use_container_width=True)
         st.markdown("#### 학급별 성취도")
