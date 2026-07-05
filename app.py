@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.5
+성취수준별 평가결과 분석 웹앱 v1.6
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -8,6 +8,7 @@
 - v1.3: 표 화면/엑셀 출력에서 비율값은 52.3%처럼 데이터에 %를 포함하고, 헤더에 (명)/(점)/(%) 단위 표시
 - v1.4: 업로드 후 문항정보표를 웹앱에서 직접 수정하고, 수정값을 분석/엑셀/AI에 반영
 - v1.5: 문항정보 수정표의 데이터 타입 충돌로 인한 st.data_editor 오류 수정
+- v1.6: 성취도 분석 탭에 학급별 최고·최저·평균 그래프와 선택 학급 성취수준 분포 그래프 추가
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -29,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import streamlit as st
+import matplotlib.pyplot as plt
 from openpyxl import load_workbook
 
 try:
@@ -37,7 +39,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.5"
+APP_VERSION = "v1.6"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -382,6 +384,65 @@ def calc_cronbach_alpha(long_df: pd.DataFrame) -> Optional[float]:
     if total_var == 0 or pd.isna(total_var):
         return None
     return float(k / (k - 1) * (1 - item_var_sum / total_var))
+
+
+def make_class_score_summary_figure(class_achievement: pd.DataFrame):
+    df = class_achievement.copy()
+    if df.empty:
+        return None
+    df = df.sort_values("반")
+    labels = [f"{int(x)}반" if pd.notna(x) and float(x).is_integer() else f"{x}반" for x in df["반"]]
+    x = np.arange(len(df))
+    ymin = pd.to_numeric(df["최저점"], errors="coerce").to_numpy()
+    ymax = pd.to_numeric(df["최고점"], errors="coerce").to_numpy()
+    yavg = pd.to_numeric(df["평균"], errors="coerce").to_numpy()
+
+    fig_width = max(8, min(22, 0.55 * len(df) + 5))
+    fig, ax = plt.subplots(figsize=(fig_width, 5.2))
+    ax.vlines(x, ymin, ymax, linewidth=5, alpha=0.28, label="최저~최고")
+    ax.scatter(x, yavg, s=70, zorder=3, label="평균")
+    ax.scatter(x, ymax, marker="^", s=45, zorder=3, label="최고")
+    ax.scatter(x, ymin, marker="v", s=45, zorder=3, label="최저")
+    ax.set_title("학급별 최고·최저·평균 점수")
+    ax.set_xlabel("학급")
+    ax.set_ylabel("점수")
+    ax.set_ylim(0, max(100, np.nanmax(ymax) + 5 if len(ymax) else 100))
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45 if len(labels) >= 10 else 0, ha="right" if len(labels) >= 10 else "center")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    return fig
+
+
+def make_class_level_distribution_figure(individual_df: pd.DataFrame, selected_class: Any):
+    df = individual_df[individual_df["반"].astype(str) == str(selected_class)].copy()
+    if df.empty:
+        return None
+    levels = list("ABCDE")
+    counts = df["성취수준"].value_counts().reindex(levels, fill_value=0)
+    total = int(counts.sum())
+    percentages = counts / total * 100 if total else counts * 0
+
+    fig, ax = plt.subplots(figsize=(8, 4.8))
+    bars = ax.bar(levels, counts.values)
+    ax.set_title(f"{int(float(selected_class)) if str(selected_class).replace('.', '', 1).isdigit() else selected_class}반 성취수준 분포")
+    ax.set_xlabel("성취수준")
+    ax.set_ylabel("학생 수(명)")
+    upper = max(1, int(counts.max()))
+    ax.set_ylim(0, upper + max(1, upper * 0.2))
+    ax.grid(axis="y", alpha=0.25)
+    for bar, count, pct in zip(bars, counts.values, percentages.values):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            f"{int(count)}명\n{pct:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+    fig.tight_layout()
+    return fig
 
 
 def item_discrimination(long_df: pd.DataFrame, student_scores: pd.DataFrame) -> pd.DataFrame:
@@ -976,6 +1037,28 @@ def main() -> None:
         a3.metric("최고/최저(점)", f"{analysis['achievement'].loc[0, '최고점']:.1f} / {analysis['achievement'].loc[0, '최저점']:.1f}")
         a4.metric("검사신뢰도 α", "-" if alpha is None else f"{alpha:.3f}")
         st.dataframe(fmt_percent_df(analysis["achievement"]), use_container_width=True)
+
+        st.markdown("#### 전체 분석 그래프")
+        class_score_fig = make_class_score_summary_figure(analysis["class_achievement"])
+        if class_score_fig is not None:
+            st.pyplot(class_score_fig, use_container_width=True)
+        else:
+            st.info("표시할 학급별 점수 데이터가 없습니다.")
+
+        st.markdown("#### 한 반 분석 그래프")
+        class_values = sorted(analysis["individual"]["반"].dropna().unique().tolist())
+        selected_class_for_graph = st.selectbox(
+            "분석할 반 선택",
+            class_values,
+            format_func=lambda x: f"{int(x)}반" if pd.notna(x) and float(x).is_integer() else f"{x}반",
+            key="achievement_class_graph_select",
+        )
+        class_level_fig = make_class_level_distribution_figure(analysis["individual"], selected_class_for_graph)
+        if class_level_fig is not None:
+            st.pyplot(class_level_fig, use_container_width=True)
+        else:
+            st.info("선택한 반의 성취수준 데이터가 없습니다.")
+
         st.markdown("#### 학급별 성취도")
         st.dataframe(fmt_percent_df(analysis["class_achievement"]), use_container_width=True)
 
