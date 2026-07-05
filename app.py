@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.19
+성취수준별 평가결과 분석 웹앱 v1.21
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -23,6 +23,7 @@
 - v1.18: 문항별 분석 탭에 예상 난이도와 실제 정답률 기준 난이도의 괴리 분석, 기준 조절, 괴리 문항 강조 기능 추가
 - v1.19: 난이도 괴리 분석 그래프의 Vega-Lite 데이터 연결 오류 수정
 - v1.20: 난이도 괴리 분석을 예상 난이도 기준 구간과 실제 정답률의 차이(%p) 중심으로 단순화
+- v1.21: 난이도 괴리 분석 그래프를 제거하고 일치/예상보다 어려웠음/예상보다 쉬웠음만 표시
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -52,7 +53,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.20"
+APP_VERSION = "v1.21"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -609,10 +610,10 @@ def difficulty_gap_label(gap: Any) -> str:
     if pd.isna(g):
         return "비교 불가"
     if abs(float(g)) < 0.05:
-        return "기준 안"
-    if float(g) > 0:
-        return "기준보다 높음"
-    return "기준보다 낮음"
+        return "일치"
+    if float(g) < 0:
+        return "예상보다 어려웠음"
+    return "예상보다 쉬웠음"
 
 
 def make_difficulty_gap_analysis(item_df: pd.DataFrame, hard_cut_percent: float = 33.0, easy_cut_percent: float = 66.0) -> pd.DataFrame:
@@ -631,12 +632,12 @@ def make_difficulty_gap_analysis(item_df: pd.DataFrame, hard_cut_percent: float 
         axis=1,
     )
     out["차이해석"] = out["차이(%p)"].apply(difficulty_gap_label)
-    out["괴리여부"] = np.where(out["차이해석"] == "기준 안", "기준 안", np.where(out["차이해석"] == "비교 불가", "비교 불가", "차이 있음"))
+    out["괴리여부"] = np.where(out["차이해석"] == "일치", "일치", np.where(out["차이해석"] == "비교 불가", "비교 불가", "불일치"))
     keep_cols = [
         "문항번호", "평가영역", "예상난이도", "기대정답률구간", "정답률", "정답률_pct",
         "차이(%p)", "차이해석", "괴리여부", "배점", "정답", "변별도"
     ]
-    return out[[c for c in keep_cols if c in out.columns]].sort_values(["괴리여부", "차이(%p)", "문항번호"], ascending=[False, True, True])
+    return out[[c for c in keep_cols if c in out.columns]].sort_values(["괴리여부", "문항번호"], ascending=[False, True])
 
 
 def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, float]) -> Dict[str, pd.DataFrame | float | None]:
@@ -852,8 +853,8 @@ def build_overall_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any]) -> str
 [성취수준별 문항 분석 중 정답률 낮은 문항]
 {ai_percent_df(level_item[['문항번호','평가영역','정답률','A','B','C','D','E','수준간격차']].head(10)).to_string(index=False)}
 
-[예상 난이도 기준 정답률 구간과 실제 정답률 차이가 큰 문항]
-{difficulty_gap[['문항번호','평가영역','예상난이도','기대정답률구간','정답률_pct','차이(%p)','차이해석']].head(10).to_string(index=False) if not difficulty_gap.empty else '차이 문항 없음'}
+[예상 난이도와 실제 정답률 판정]
+{difficulty_gap[['문항번호','평가영역','예상난이도','기대정답률구간','정답률_pct','차이해석']].head(10).to_string(index=False) if not difficulty_gap.empty else '불일치 문항 없음'}
 
 다음 형식으로 작성하라.
 1. 전체 성취도 요약
@@ -1504,7 +1505,7 @@ def main() -> None:
         st.markdown("정답률과 변별도를 기준으로 취약 문항을 먼저 확인할 수 있습니다.")
         st.dataframe(fmt_percent_df(analysis["item"].sort_values("정답률")), use_container_width=True, height=420)
 
-        st.markdown("#### 예상 난이도-실제 정답률 차이")
+        st.markdown("#### 예상 난이도-실제 정답률 일치 여부")
         hard_cut, easy_cut = st.slider(
             "기준 조절",
             min_value=0,
@@ -1515,63 +1516,19 @@ def main() -> None:
         difficulty_gap_df = make_difficulty_gap_analysis(analysis["item"], hard_cut_percent=float(hard_cut), easy_cut_percent=float(easy_cut))
         analysis["difficulty_gap"] = difficulty_gap_df
 
-        gap_only = st.checkbox("차이 있는 문항만 보기", value=True)
-        gap_view_df = difficulty_gap_df[difficulty_gap_df["괴리여부"] == "차이 있음"].copy() if gap_only else difficulty_gap_df.copy()
+        gap_only = st.checkbox("불일치 문항만 보기", value=True)
+        gap_view_df = difficulty_gap_df[difficulty_gap_df["괴리여부"] == "불일치"].copy() if gap_only else difficulty_gap_df.copy()
 
         c1, c2 = st.columns(2)
-        c1.metric("차이 있는 문항수(개)", f"{int((difficulty_gap_df['괴리여부'] == '차이 있음').sum())}")
-        gap_rate = (difficulty_gap_df["괴리여부"] == "차이 있음").mean() if len(difficulty_gap_df) else 0
-        c2.metric("차이 비율(%)", f"{gap_rate * 100:.1f}%")
+        c1.metric("불일치 문항수(개)", f"{int((difficulty_gap_df['괴리여부'] == '불일치').sum())}")
+        gap_rate = (difficulty_gap_df["괴리여부"] == "불일치").mean() if len(difficulty_gap_df) else 0
+        c2.metric("불일치 비율(%)", f"{gap_rate * 100:.1f}%")
 
-        chart_gap_df = gap_view_df.copy()
-        chart_gap_df["문항"] = chart_gap_df["문항번호"].astype(str)
-        chart_gap_df["차이표시"] = chart_gap_df["차이(%p)"].map(lambda x: "" if pd.isna(x) else f"{x:+.1f}%p")
-        if not chart_gap_df.empty:
-            st.vega_lite_chart(
-                chart_gap_df,
-                {
-                    "height": 280,
-                    "width": "container",
-                    "config": {
-                        "axis": {"labelFontSize": 12, "titleFontSize": 13, "grid": True},
-                        "view": {"stroke": "transparent"},
-                    },
-                    "layer": [
-                        {
-                            "mark": {"type": "bar", "cornerRadiusTopLeft": 4, "cornerRadiusTopRight": 4},
-                            "encoding": {
-                                "x": {"field": "문항", "type": "ordinal", "axis": {"title": "문항번호", "labelAngle": 0}},
-                                "y": {
-                                    "field": "차이(%p)",
-                                    "type": "quantitative",
-                                    "axis": {"title": "차이(%p)"},
-                                    "scale": {"zero": True},
-                                },
-                                "tooltip": [
-                                    {"field": "문항번호", "type": "ordinal", "title": "문항번호"},
-                                    {"field": "예상난이도", "type": "nominal", "title": "예상 난이도"},
-                                    {"field": "기대정답률구간", "type": "nominal", "title": "기대 정답률 구간"},
-                                    {"field": "정답률_pct", "type": "quantitative", "format": ".1f", "title": "실제 정답률(%)"},
-                                    {"field": "차이표시", "type": "nominal", "title": "차이"},
-                                ],
-                            },
-                        },
-                        {
-                            "mark": {"type": "rule", "strokeWidth": 2},
-                            "encoding": {"y": {"datum": 0, "type": "quantitative"}},
-                        },
-                    ],
-                },
-                use_container_width=True,
-            )
-        else:
-            st.info("표시할 문항이 없습니다.")
-
-        display_gap = gap_view_df[[c for c in ["문항번호", "평가영역", "예상난이도", "기대정답률구간", "정답률_pct", "차이(%p)", "차이해석"] if c in gap_view_df.columns]].copy()
+        display_gap = gap_view_df[[c for c in ["문항번호", "평가영역", "예상난이도", "기대정답률구간", "정답률_pct", "차이해석"] if c in gap_view_df.columns]].copy()
         if "정답률_pct" in display_gap.columns:
             display_gap["실제정답률(%)"] = display_gap.pop("정답률_pct").map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
-        if "차이(%p)" in display_gap.columns:
-            display_gap["차이(%p)"] = display_gap["차이(%p)"].map(lambda x: "" if pd.isna(x) else f"{x:+.1f}")
+        if "차이해석" in display_gap.columns:
+            display_gap = display_gap.rename(columns={"차이해석": "판정"})
         st.dataframe(display_gap, use_container_width=True, height=320, hide_index=True)
 
     with tab3:
