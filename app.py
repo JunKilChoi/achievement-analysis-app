@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.18
+성취수준별 평가결과 분석 웹앱 v1.19
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -21,6 +21,7 @@
 - v1.16: 전체 분석 항아리형 그래프에 평균점수 라벨을 추가하고, 점수 구간 툴팁을 한 줄 표시로 정리
 - v1.17: 개별 반 분석 그래프의 학생수 축을 0 이상 고정하고, 확대/축소형 상호작용을 제거하며 성취수준 비율 표시 오류 수정
 - v1.18: 문항별 분석 탭에 예상 난이도와 실제 정답률 기준 난이도의 괴리 분석, 기준 조절, 괴리 문항 강조 기능 추가
+- v1.19: 난이도 괴리 분석 그래프의 Vega-Lite 데이터 연결 오류 수정
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -1497,13 +1498,12 @@ def main() -> None:
         chart_gap_df["문항"] = chart_gap_df["문항번호"].astype(str)
         chart_gap_df["정답률_pct"] = pd.to_numeric(chart_gap_df["정답률"], errors="coerce") * 100
         chart_gap_df["툴팁정답률"] = chart_gap_df["정답률_pct"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
-        threshold_df = pd.DataFrame({
-            "기준": ["어려움/보통", "보통/쉬움"],
-            "정답률_pct": [float(hard_cut), float(easy_cut)],
-        })
-
+        # Streamlit Cloud에서 여러 데이터셋을 dict로 넘기면 Vega-Lite marshalling 오류가 날 수 있어,
+        # 막대 데이터는 data 인자로 넘기고 기준선은 datum 값으로 직접 그린다.
+        hard_cut_value = float(hard_cut)
+        easy_cut_value = float(easy_cut)
         st.vega_lite_chart(
-            {"items": chart_gap_df, "thresholds": threshold_df},
+            chart_gap_df,
             {
                 "height": 330,
                 "width": "container",
@@ -1514,7 +1514,6 @@ def main() -> None:
                 },
                 "layer": [
                     {
-                        "data": {"name": "items"},
                         "mark": {"type": "bar", "cornerRadiusTopLeft": 4, "cornerRadiusTopRight": 4},
                         "encoding": {
                             "x": {"field": "문항", "type": "ordinal", "axis": {"title": "문항번호", "labelAngle": 0}},
@@ -1536,23 +1535,31 @@ def main() -> None:
                         },
                     },
                     {
-                        "data": {"name": "thresholds"},
                         "mark": {"type": "rule", "strokeDash": [6, 4], "strokeWidth": 2},
                         "encoding": {
-                            "y": {"field": "정답률_pct", "type": "quantitative"},
-                            "tooltip": [
-                                {"field": "기준", "type": "nominal", "title": "기준"},
-                                {"field": "정답률_pct", "type": "quantitative", "title": "정답률(%)", "format": ".0f"},
-                            ],
+                            "y": {"datum": hard_cut_value, "type": "quantitative"},
                         },
                     },
                     {
-                        "data": {"name": "thresholds"},
+                        "mark": {"type": "rule", "strokeDash": [6, 4], "strokeWidth": 2},
+                        "encoding": {
+                            "y": {"datum": easy_cut_value, "type": "quantitative"},
+                        },
+                    },
+                    {
                         "mark": {"type": "text", "align": "left", "baseline": "bottom", "dx": 4, "dy": -2, "fontSize": 12},
                         "encoding": {
                             "x": {"value": 0},
-                            "y": {"field": "정답률_pct", "type": "quantitative"},
-                            "text": {"field": "기준", "type": "nominal"},
+                            "y": {"datum": hard_cut_value, "type": "quantitative"},
+                            "text": {"datum": f"어려움/보통 {hard_cut_value:.0f}%"},
+                        },
+                    },
+                    {
+                        "mark": {"type": "text", "align": "left", "baseline": "bottom", "dx": 4, "dy": -2, "fontSize": 12},
+                        "encoding": {
+                            "x": {"value": 0},
+                            "y": {"datum": easy_cut_value, "type": "quantitative"},
+                            "text": {"datum": f"보통/쉬움 {easy_cut_value:.0f}%"},
                         },
                     },
                 ],
