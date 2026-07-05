@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.14
+성취수준별 평가결과 분석 웹앱 v1.15
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -17,6 +17,7 @@
 - v1.12: 학생답 정오표 다중 업로드를 파일별 독립 처리로 안정화하고, 성공/중복/실패 파일을 개별 표시
 - v1.13: 정답을 .으로 표시하는 정오표와 정답 번호로 표시하는 정오표를 모두 지원하고, A~Z 복수답안코드 규약 반영
 - v1.14: 성취수준 산출 기준을 환산점수에서 시험지 원점수 기준으로 변경하고, 정오표/정답 표시의 1.0 같은 정수형 소수 표시를 1로 정규화
+- v1.15: 전체 분석 항아리형 그래프의 최고점·최저점 범위선 끝에 최고/최저 라벨과 점수 표시 추가
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -46,7 +47,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.14"
+APP_VERSION = "v1.15"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -497,7 +498,9 @@ def make_class_score_distribution_chart_data(individual_df: pd.DataFrame, class_
     summary["학급"] = summary["학급위치"].astype(int).map(class_label_map)
     for col in ["최고점", "평균", "최저점"]:
         summary[col] = pd.to_numeric(summary[col], errors="coerce")
-    summary = summary[["학급위치", "학급", "최고점", "평균", "최저점"]]
+    summary["최고라벨"] = summary["최고점"].apply(lambda x: f"최고 {x:.1f}" if pd.notna(x) else "최고")
+    summary["최저라벨"] = summary["최저점"].apply(lambda x: f"최저 {x:.1f}" if pd.notna(x) else "최저")
+    summary = summary[["학급위치", "학급", "최고점", "평균", "최저점", "최고라벨", "최저라벨"]]
 
     label_array = "[" + ",".join([repr(class_label_map[i]) for i in sorted(class_label_map)]) + "]"
     label_expr = f"{label_array}[datum.value-1]"
@@ -1250,6 +1253,40 @@ def main() -> None:
                                 "encoding": {
                                     "x": {"field": "학급위치", "type": "quantitative"},
                                     "y": {"field": "최저점", "type": "quantitative"},
+                                },
+                            },
+                            {
+                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
+                                "mark": {
+                                    "type": "text",
+                                    "align": "left",
+                                    "baseline": "middle",
+                                    "dx": 10,
+                                    "fontSize": 11,
+                                    "fontWeight": "bold",
+                                    "color": "#111827",
+                                },
+                                "encoding": {
+                                    "x": {"field": "학급위치", "type": "quantitative"},
+                                    "y": {"field": "최고점", "type": "quantitative"},
+                                    "text": {"field": "최고라벨", "type": "nominal"},
+                                },
+                            },
+                            {
+                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
+                                "mark": {
+                                    "type": "text",
+                                    "align": "left",
+                                    "baseline": "middle",
+                                    "dx": 10,
+                                    "fontSize": 11,
+                                    "fontWeight": "bold",
+                                    "color": "#111827",
+                                },
+                                "encoding": {
+                                    "x": {"field": "학급위치", "type": "quantitative"},
+                                    "y": {"field": "최저점", "type": "quantitative"},
+                                    "text": {"field": "최저라벨", "type": "nominal"},
                                 },
                             },
                             {
