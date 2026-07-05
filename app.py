@@ -13,6 +13,7 @@
 - v1.8: 성취도 분석 탭의 전체 분석 그래프를 최고점·최저점·평균 캔들형으로 변경하고, 전체/개별 반 그래프를 좌우 배치
 - v1.9: 전체 분석 캔들형 그래프의 최고·최저 범위선과 평균점을 강조하고, “한 반 분석” 용어를 “개별 반 분석”으로 변경
 - v1.10: 전체 분석 그래프에 점수 구간별 도수 폭을 반영한 항아리형 분포를 추가하여 최고·최저·평균과 분포를 함께 표시
+- v1.11: 전체 분석 그래프의 Vega-Lite 데이터 연결 방식을 수정하여 항아리형 분포와 평균점이 실제로 표시되도록 보정
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -42,7 +43,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.8"
+APP_VERSION = "v1.11"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1064,13 +1065,17 @@ def main() -> None:
                 analysis["individual"], analysis["class_achievement"], bin_size=5
             )
             if not summary_chart_df.empty:
+                dist_for_chart = dist_chart_df.copy()
+                summary_for_chart = summary_chart_df.copy()
+                dist_for_chart["그래프요소"] = "분포"
+                summary_for_chart["그래프요소"] = "요약"
+                chart_source_df = pd.concat([dist_for_chart, summary_for_chart], ignore_index=True, sort=False)
+
                 st.vega_lite_chart(
-                    {
-                        "distribution": dist_chart_df.to_dict("records"),
-                        "summary": summary_chart_df.to_dict("records"),
-                    },
+                    chart_source_df,
                     {
                         "height": 390,
+                        "width": "container",
                         "resolve": {"scale": {"x": "shared", "y": "shared"}},
                         "config": {
                             "axis": {"labelFontSize": 12, "titleFontSize": 13, "grid": True},
@@ -1078,12 +1083,12 @@ def main() -> None:
                         },
                         "layer": [
                             {
-                                "data": {"name": "distribution"},
+                                "transform": [{"filter": "datum.그래프요소 == '분포'"}],
                                 "mark": {
                                     "type": "rect",
                                     "cornerRadius": 2,
                                     "color": "#94A3B8",
-                                    "opacity": 0.75,
+                                    "opacity": 0.8,
                                 },
                                 "encoding": {
                                     "x": {
@@ -1113,7 +1118,7 @@ def main() -> None:
                                 },
                             },
                             {
-                                "data": {"name": "summary"},
+                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
                                 "mark": {
                                     "type": "rule",
                                     "strokeWidth": 5,
@@ -1133,28 +1138,28 @@ def main() -> None:
                                 },
                             },
                             {
-                                "data": {"name": "summary"},
-                                "mark": {"type": "tick", "thickness": 4, "size": 32, "color": "#111827"},
+                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
+                                "mark": {"type": "tick", "thickness": 4, "size": 36, "color": "#111827"},
                                 "encoding": {
                                     "x": {"field": "학급위치", "type": "quantitative"},
                                     "y": {"field": "최고점", "type": "quantitative"},
                                 },
                             },
                             {
-                                "data": {"name": "summary"},
-                                "mark": {"type": "tick", "thickness": 4, "size": 32, "color": "#111827"},
+                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
+                                "mark": {"type": "tick", "thickness": 4, "size": 36, "color": "#111827"},
                                 "encoding": {
                                     "x": {"field": "학급위치", "type": "quantitative"},
                                     "y": {"field": "최저점", "type": "quantitative"},
                                 },
                             },
                             {
-                                "data": {"name": "summary"},
+                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
                                 "mark": {
                                     "type": "point",
                                     "filled": True,
                                     "shape": "diamond",
-                                    "size": 240,
+                                    "size": 260,
                                     "color": "#E11D48",
                                     "stroke": "white",
                                     "strokeWidth": 2.5,
