@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.24
+성취수준별 평가결과 분석 웹앱 v1.25
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -27,6 +27,7 @@
 - v1.22: 난이도 괴리 분석의 예상 난이도를 편집값이 아니라 업로드한 문항정보표 원본 난이도 기준으로 고정
 - v1.23: 난이도 괴리 분석에서 체크박스를 제거하고 문항번호 순으로 전체 표시, 일치/불일치/예상보다 어려움/쉬움 개수 요약 추가
 - v1.24: 난이도 괴리 분석 기준 입력을 어려움/보통 난이도 구분 정답률, 보통/쉬움 난이도 구분 정답률로 분리
+- v1.25: 난이도 일치 여부 영역을 카드형으로 정리하고 기준 입력/요약 지표의 가시성 개선
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -56,7 +57,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.24"
+APP_VERSION = "v1.25"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1535,23 +1536,41 @@ def main() -> None:
         st.dataframe(fmt_percent_df(analysis["item"].sort_values("정답률")), use_container_width=True, height=420)
 
         st.markdown("#### 예상 난이도-실제 정답률 일치 여부")
-        기준_col1, 기준_col2 = st.columns(2)
-        with 기준_col1:
-            hard_cut = st.number_input(
-                "어려움/보통 난이도 구분 정답률(%)",
-                min_value=0,
-                max_value=100,
-                value=33,
-                step=1,
-            )
-        with 기준_col2:
-            easy_cut = st.number_input(
-                "보통/쉬움 난이도 구분 정답률(%)",
-                min_value=0,
-                max_value=100,
-                value=66,
-                step=1,
-            )
+
+        with st.container(border=True):
+            st.markdown("##### 실제 난이도 판정 기준")
+            기준_col1, 기준_col2, 기준_col3 = st.columns([1.2, 1.2, 1.6])
+            with 기준_col1:
+                hard_cut = st.number_input(
+                    "어려움/보통 난이도 구분 정답률(%)",
+                    min_value=0,
+                    max_value=100,
+                    value=33,
+                    step=1,
+                    key="difficulty_hard_cut_input",
+                )
+            with 기준_col2:
+                easy_cut = st.number_input(
+                    "보통/쉬움 난이도 구분 정답률(%)",
+                    min_value=0,
+                    max_value=100,
+                    value=66,
+                    step=1,
+                    key="difficulty_easy_cut_input",
+                )
+            with 기준_col3:
+                st.markdown(
+                    f"""
+                    <div style="height:100%; min-height:74px; display:flex; align-items:center; padding:0.6rem 0.2rem; color:#475569; font-size:0.92rem; line-height:1.55;">
+                        <div>
+                            <b>어려움</b> &lt; {int(hard_cut)}% &nbsp;·&nbsp;
+                            <b>보통</b> {int(hard_cut)}% 이상 {int(easy_cut)}% 미만 &nbsp;·&nbsp;
+                            <b>쉬움</b> {int(easy_cut)}% 이상
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
         if int(hard_cut) >= int(easy_cut):
             st.warning("보통/쉬움 난이도 구분 정답률은 어려움/보통 난이도 구분 정답률보다 커야 합니다. 현재는 기본값 33%, 66%로 계산합니다.")
@@ -1567,11 +1586,64 @@ def main() -> None:
         easier_count = int((difficulty_gap_df["차이해석"] == "예상보다 쉬웠음").sum()) if not difficulty_gap_df.empty else 0
         mismatch_count = harder_count + easier_count
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("일치 문항수(개)", f"{match_count}")
-        c2.metric("불일치 문항수(개)", f"{mismatch_count}")
-        c3.metric("예상보다 어려운 문항수(개)", f"{harder_count}")
-        c4.metric("예상보다 쉬운 문항수(개)", f"{easier_count}")
+        st.markdown(
+            f"""
+            <style>
+            .difficulty-summary-grid {{
+                display: grid;
+                grid-template-columns: repeat(4, minmax(120px, 1fr));
+                gap: 0.7rem;
+                margin: 0.85rem 0 1.05rem 0;
+            }}
+            .difficulty-summary-card {{
+                border: 1px solid #E5E7EB;
+                border-radius: 14px;
+                padding: 0.85rem 1rem;
+                background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%);
+                box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+            }}
+            .difficulty-summary-label {{
+                color: #64748B;
+                font-size: 0.86rem;
+                font-weight: 600;
+                margin-bottom: 0.25rem;
+                white-space: nowrap;
+            }}
+            .difficulty-summary-value {{
+                color: #0F172A;
+                font-size: 1.85rem;
+                font-weight: 800;
+                line-height: 1.05;
+            }}
+            .difficulty-summary-subtle {{ border-left: 5px solid #CBD5E1; }}
+            .difficulty-summary-hard {{ border-left: 5px solid #EF4444; }}
+            .difficulty-summary-easy {{ border-left: 5px solid #3B82F6; }}
+            .difficulty-summary-match {{ border-left: 5px solid #22C55E; }}
+            @media (max-width: 900px) {{
+                .difficulty-summary-grid {{ grid-template-columns: repeat(2, minmax(120px, 1fr)); }}
+            }}
+            </style>
+            <div class="difficulty-summary-grid">
+                <div class="difficulty-summary-card difficulty-summary-match">
+                    <div class="difficulty-summary-label">일치 문항수(개)</div>
+                    <div class="difficulty-summary-value">{match_count}</div>
+                </div>
+                <div class="difficulty-summary-card difficulty-summary-subtle">
+                    <div class="difficulty-summary-label">불일치 문항수(개)</div>
+                    <div class="difficulty-summary-value">{mismatch_count}</div>
+                </div>
+                <div class="difficulty-summary-card difficulty-summary-hard">
+                    <div class="difficulty-summary-label">예상보다 어려운 문항수(개)</div>
+                    <div class="difficulty-summary-value">{harder_count}</div>
+                </div>
+                <div class="difficulty-summary-card difficulty-summary-easy">
+                    <div class="difficulty-summary-label">예상보다 쉬운 문항수(개)</div>
+                    <div class="difficulty-summary-value">{easier_count}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         gap_view_df = difficulty_gap_df.sort_values("문항번호", ascending=True).copy()
         display_gap = gap_view_df[[c for c in ["문항번호", "평가영역", "예상난이도", "기대정답률구간", "정답률_pct", "차이해석"] if c in gap_view_df.columns]].copy()
