@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.33
+성취수준별 평가결과 분석 웹앱 v1.34
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -36,6 +36,7 @@
 - v1.31: 기본/고급 AI 분석 max_output_tokens를 16000으로 확대
 - v1.32: 기본 AI 분석 프롬프트를 통계 기반 진단 중심으로 개편하고, 고급 분석 필요 문항 추천 항목 추가
 - v1.33: 기본 AI 분석 프롬프트를 이전 해석형 구조로 복원하고, 선택지 반응 및 오답 경향 분석 항목 추가
+- v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -51,6 +52,7 @@ import hashlib
 import io
 import re
 import zipfile
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -65,7 +67,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.33"
+APP_VERSION = "v1.34"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1115,6 +1117,114 @@ def call_openai(api_key: str, model: str, prompt: str) -> str:
     return getattr(resp, "output_text", "").strip()
 
 
+
+
+def make_ai_report_docx(parsed: ParsedData, analysis: Dict[str, Any], report_title: str, report_body: str, report_type: str = "AI 분석") -> bytes:
+    """AI 분석 결과를 평가정보가 포함된 Word 보고서 형태로 만든다."""
+    try:
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Pt, Inches
+    except Exception as e:
+        raise RuntimeError("Word(.docx) 저장을 위해 python-docx가 필요합니다. requirements.txt에 python-docx를 추가하세요.") from e
+
+    doc = Document()
+    section = doc.sections[0]
+    section.top_margin = Inches(0.7)
+    section.bottom_margin = Inches(0.7)
+    section.left_margin = Inches(0.8)
+    section.right_margin = Inches(0.8)
+
+    styles = doc.styles
+    styles["Normal"].font.name = "맑은 고딕"
+    styles["Normal"].font.size = Pt(10.5)
+    for style_name in ["Title", "Heading 1", "Heading 2", "Heading 3"]:
+        if style_name in styles:
+            styles[style_name].font.name = "맑은 고딕"
+
+    title = doc.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = title.add_run(report_title)
+    run.bold = True
+    run.font.size = Pt(18)
+
+    subtitle = doc.add_paragraph()
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    sub_run = subtitle.add_run(f"{report_type} · 생성일시 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    sub_run.font.size = Pt(9.5)
+
+    doc.add_paragraph()
+    doc.add_heading("평가 정보", level=1)
+
+    exam = parsed.exam_info or {}
+    achievement = analysis.get("achievement", pd.DataFrame())
+    overall = achievement.iloc[0].to_dict() if isinstance(achievement, pd.DataFrame) and not achievement.empty else {}
+    alpha = analysis.get("alpha")
+
+    info_rows = [
+        ("학년도", exam.get("학년도", "")),
+        ("학년", exam.get("학년", "")),
+        ("학기", exam.get("학기", "")),
+        ("평가구분", exam.get("평가구분", "")),
+        ("교과목", exam.get("교과목", "")),
+        ("선택형 만점", exam.get("선택형만점", "")),
+        ("서답형 만점", exam.get("서답형만점", "")),
+        ("과목 만점", exam.get("과목만점", "")),
+        ("선택형 문항 수", exam.get("선택형문항수", "")),
+        ("서답형 문항 수", exam.get("서답형문항수", "")),
+        ("응시자 수", overall.get("응시자수(명)", overall.get("응시자수", ""))),
+        ("전체 평균", overall.get("평균(점)", overall.get("평균", ""))),
+        ("표준편차", overall.get("표준편차", "")),
+        ("최고점", overall.get("최고점(점)", overall.get("최고점", ""))),
+        ("최저점", overall.get("최저점(점)", overall.get("최저점", ""))),
+        ("검사신뢰도 α", "" if alpha is None else round(float(alpha), 3)),
+    ]
+    info_rows = [(k, "" if v is None else str(v)) for k, v in info_rows if str(v) not in ["", "nan", "None"]]
+
+    table = doc.add_table(rows=1, cols=2)
+    table.style = "Table Grid"
+    hdr = table.rows[0].cells
+    hdr[0].text = "항목"
+    hdr[1].text = "내용"
+    for key, val in info_rows:
+        cells = table.add_row().cells
+        cells[0].text = key
+        cells[1].text = val
+
+    doc.add_paragraph()
+    doc.add_heading("AI 분석 결과", level=1)
+
+    def add_formatted_line(line: str) -> None:
+        raw = line.rstrip()
+        if raw == "":
+            doc.add_paragraph()
+            return
+        text = raw.strip()
+        if re.match(r"^#{1,3}\s+", text):
+            level = min(len(text) - len(text.lstrip('#')), 3)
+            doc.add_heading(re.sub(r"^#{1,3}\s+", "", text), level=level)
+            return
+        if re.match(r"^\d+\.\s+", text) and len(text) <= 90:
+            p = doc.add_paragraph()
+            r = p.add_run(text)
+            r.bold = True
+            r.font.size = Pt(12)
+            return
+        if text.startswith(('-', '•', '*')):
+            doc.add_paragraph(text.lstrip('-•* ').strip(), style='List Bullet')
+            return
+        p = doc.add_paragraph()
+        p.paragraph_format.line_spacing = 1.15
+        p.add_run(text)
+
+    for line in str(report_body).splitlines():
+        add_formatted_line(line)
+
+    bio = io.BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
 # -----------------------------------------------------------------------------
 # Streamlit UI
 # -----------------------------------------------------------------------------
@@ -1933,7 +2043,7 @@ def main() -> None:
         with ai_tab_basic:
             with st.container(border=True):
                 st.markdown("#### 기본 분석: 통계 기반 해석")
-                st.markdown("원안지 PDF 없이 현재 분석 데이터만으로 전체 경향, 취약 영역, 문항별 이상 신호, 학생 개별 피드백을 생성합니다.")
+                st.markdown("원안지 PDF 없이 현재 분석 데이터만으로 전체 경향, 취약 영역, 문항별 이상 신호, 학생 개별 피드백을 생성합니다. 결과는 평가 정보가 포함된 Word 문서로 저장할 수 있습니다.")
                 basic_mode = st.radio(
                     "기본 분석 유형",
                     ["전체 통계 분석", "학생 개별 분석"],
@@ -1945,10 +2055,10 @@ def main() -> None:
                     student_options = analysis["individual"].sort_values(["반", "번호"])["반/번호"].tolist()
                     ai_student = st.selectbox("AI 분석 대상 학생", student_options, key="basic_ai_student")
                     basic_prompt = build_individual_ai_prompt(parsed, analysis, ai_student, anonymize=anonymize)
-                    basic_download_name = "AI_기본분석_학생개별.txt"
+                    basic_download_name = "AI_기본분석_학생개별.docx"
                 else:
                     basic_prompt = build_basic_statistics_ai_prompt(parsed, analysis)
-                    basic_download_name = "AI_기본분석_통계기반해석.txt"
+                    basic_download_name = "AI_기본분석_통계기반해석.docx"
 
             with st.container(border=True):
                 with st.expander("AI에 전달될 기본 분석 프롬프트 확인", expanded=False):
@@ -1962,7 +2072,16 @@ def main() -> None:
                                 result = call_openai(api_key, model, basic_prompt)
                                 st.markdown("#### 기본 분석 결과")
                                 st.write(result)
-                                st.download_button("기본 분석 결과 TXT 다운로드", result.encode("utf-8-sig"), basic_download_name, "text/plain")
+                                report_title = "성취수준별 평가결과 AI 분석 보고서"
+                                report_type = f"기본 분석: {basic_mode}"
+                                docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type)
+                                st.download_button(
+                                    "기본 분석 결과 Word 다운로드",
+                                    docx_bytes,
+                                    basic_download_name,
+                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    use_container_width=True,
+                                )
                             except Exception as e:
                                 st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
 
