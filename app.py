@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.21
+성취수준별 평가결과 분석 웹앱 v1.22
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -24,6 +24,7 @@
 - v1.19: 난이도 괴리 분석 그래프의 Vega-Lite 데이터 연결 오류 수정
 - v1.20: 난이도 괴리 분석을 예상 난이도 기준 구간과 실제 정답률의 차이(%p) 중심으로 단순화
 - v1.21: 난이도 괴리 분석 그래프를 제거하고 일치/예상보다 어려웠음/예상보다 쉬웠음만 표시
+- v1.22: 난이도 괴리 분석의 예상 난이도를 편집값이 아니라 업로드한 문항정보표 원본 난이도 기준으로 고정
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -53,7 +54,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.21"
+APP_VERSION = "v1.22"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -72,6 +73,7 @@ class ParsedData:
     long_df: pd.DataFrame
     validation_df: pd.DataFrame
     answer_key_df: pd.DataFrame
+    original_question_df: Optional[pd.DataFrame] = None
 
 
 # -----------------------------------------------------------------------------
@@ -616,9 +618,26 @@ def difficulty_gap_label(gap: Any) -> str:
     return "예상보다 쉬웠음"
 
 
-def make_difficulty_gap_analysis(item_df: pd.DataFrame, hard_cut_percent: float = 33.0, easy_cut_percent: float = 66.0) -> pd.DataFrame:
+def make_difficulty_gap_analysis(
+    item_df: pd.DataFrame,
+    hard_cut_percent: float = 33.0,
+    easy_cut_percent: float = 66.0,
+    expected_question_df: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
     out = item_df.copy()
-    out["예상난이도"] = out.get("난이도", "").apply(normalize_difficulty_value) if "난이도" in out.columns else ""
+
+    # 예상 난이도는 실제 정답률이나 기준 슬라이더가 아니라
+    # 업로드된 문항정보표 원본의 난이도에 고정한다.
+    if expected_question_df is not None and not expected_question_df.empty and {"문항번호", "난이도"}.issubset(expected_question_df.columns):
+        expected_map = expected_question_df[["문항번호", "난이도"]].copy()
+        expected_map["문항번호"] = pd.to_numeric(expected_map["문항번호"], errors="coerce")
+        expected_map["예상난이도"] = expected_map["난이도"].apply(normalize_difficulty_value)
+        expected_map = expected_map.dropna(subset=["문항번호"]).drop_duplicates("문항번호", keep="first")[["문항번호", "예상난이도"]]
+        out["문항번호"] = pd.to_numeric(out["문항번호"], errors="coerce")
+        out = out.drop(columns=["예상난이도"], errors="ignore").merge(expected_map, on="문항번호", how="left")
+        out["예상난이도"] = out["예상난이도"].fillna("")
+    else:
+        out["예상난이도"] = out.get("난이도", "").apply(normalize_difficulty_value) if "난이도" in out.columns else ""
     out["정답률_pct"] = pd.to_numeric(out["정답률"], errors="coerce") * 100
     bounds = out["예상난이도"].apply(lambda x: expected_rate_bounds(x, hard_cut_percent, easy_cut_percent))
     out["기준하한"] = bounds.apply(lambda x: x[0])
@@ -679,7 +698,7 @@ def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, flo
         item = item.merge(rates, on="문항번호", how="left")
 
     # 예상 난이도-실제 난이도 기본 괴리 분석
-    difficulty_gap = make_difficulty_gap_analysis(item, hard_cut_percent=33.0, easy_cut_percent=66.0)
+    difficulty_gap = make_difficulty_gap_analysis(item, hard_cut_percent=33.0, easy_cut_percent=66.0, expected_question_df=parsed.original_question_df)
 
     # 학급별 분석
     class_item = long_df.groupby(["반", "문항번호"]).agg(응시자수=("반/번호", "count"), 정답률=("정답여부", "mean"), 평균점수=("점수", "mean")).reset_index()
@@ -992,7 +1011,15 @@ def prepare_parsed(question_file: Any, answer_files: List[Dict[str, Any]]) -> Pa
     exam_info["학생수"] = len(sdf_all)
 
     long_df = build_long_data(qdf, sdf_all)
-    return ParsedData(exam_info=exam_info, question_df=qdf, students_df=sdf_all, long_df=long_df, validation_df=validation, answer_key_df=base_answer_key)
+    return ParsedData(
+        exam_info=exam_info,
+        question_df=qdf,
+        students_df=sdf_all,
+        long_df=long_df,
+        validation_df=validation,
+        answer_key_df=base_answer_key,
+        original_question_df=qdf.copy(),
+    )
 
 
 def is_percent_column(col: Any, series: Optional[pd.Series] = None) -> bool:
@@ -1513,7 +1540,7 @@ def main() -> None:
             value=(33, 66),
             step=1,
         )
-        difficulty_gap_df = make_difficulty_gap_analysis(analysis["item"], hard_cut_percent=float(hard_cut), easy_cut_percent=float(easy_cut))
+        difficulty_gap_df = make_difficulty_gap_analysis(analysis["item"], hard_cut_percent=float(hard_cut), easy_cut_percent=float(easy_cut), expected_question_df=parsed.original_question_df)
         analysis["difficulty_gap"] = difficulty_gap_df
 
         gap_only = st.checkbox("불일치 문항만 보기", value=True)
