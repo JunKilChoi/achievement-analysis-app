@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.22
+성취수준별 평가결과 분석 웹앱 v1.23
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -25,6 +25,7 @@
 - v1.20: 난이도 괴리 분석을 예상 난이도 기준 구간과 실제 정답률의 차이(%p) 중심으로 단순화
 - v1.21: 난이도 괴리 분석 그래프를 제거하고 일치/예상보다 어려웠음/예상보다 쉬웠음만 표시
 - v1.22: 난이도 괴리 분석의 예상 난이도를 편집값이 아니라 업로드한 문항정보표 원본 난이도 기준으로 고정
+- v1.23: 난이도 괴리 분석에서 체크박스를 제거하고 문항번호 순으로 전체 표시, 일치/불일치/예상보다 어려움/쉬움 개수 요약 추가
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -54,7 +55,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.22"
+APP_VERSION = "v1.23"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -656,7 +657,7 @@ def make_difficulty_gap_analysis(
         "문항번호", "평가영역", "예상난이도", "기대정답률구간", "정답률", "정답률_pct",
         "차이(%p)", "차이해석", "괴리여부", "배점", "정답", "변별도"
     ]
-    return out[[c for c in keep_cols if c in out.columns]].sort_values(["괴리여부", "문항번호"], ascending=[False, True])
+    return out[[c for c in keep_cols if c in out.columns]].sort_values("문항번호", ascending=True)
 
 
 def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, float]) -> Dict[str, pd.DataFrame | float | None]:
@@ -1543,14 +1544,18 @@ def main() -> None:
         difficulty_gap_df = make_difficulty_gap_analysis(analysis["item"], hard_cut_percent=float(hard_cut), easy_cut_percent=float(easy_cut), expected_question_df=parsed.original_question_df)
         analysis["difficulty_gap"] = difficulty_gap_df
 
-        gap_only = st.checkbox("불일치 문항만 보기", value=True)
-        gap_view_df = difficulty_gap_df[difficulty_gap_df["괴리여부"] == "불일치"].copy() if gap_only else difficulty_gap_df.copy()
+        match_count = int((difficulty_gap_df["차이해석"] == "일치").sum()) if not difficulty_gap_df.empty else 0
+        harder_count = int((difficulty_gap_df["차이해석"] == "예상보다 어려웠음").sum()) if not difficulty_gap_df.empty else 0
+        easier_count = int((difficulty_gap_df["차이해석"] == "예상보다 쉬웠음").sum()) if not difficulty_gap_df.empty else 0
+        mismatch_count = harder_count + easier_count
 
-        c1, c2 = st.columns(2)
-        c1.metric("불일치 문항수(개)", f"{int((difficulty_gap_df['괴리여부'] == '불일치').sum())}")
-        gap_rate = (difficulty_gap_df["괴리여부"] == "불일치").mean() if len(difficulty_gap_df) else 0
-        c2.metric("불일치 비율(%)", f"{gap_rate * 100:.1f}%")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("일치 문항수(개)", f"{match_count}")
+        c2.metric("불일치 문항수(개)", f"{mismatch_count}")
+        c3.metric("예상보다 어려운 문항수(개)", f"{harder_count}")
+        c4.metric("예상보다 쉬운 문항수(개)", f"{easier_count}")
 
+        gap_view_df = difficulty_gap_df.sort_values("문항번호", ascending=True).copy()
         display_gap = gap_view_df[[c for c in ["문항번호", "평가영역", "예상난이도", "기대정답률구간", "정답률_pct", "차이해석"] if c in gap_view_df.columns]].copy()
         if "정답률_pct" in display_gap.columns:
             display_gap["실제정답률(%)"] = display_gap.pop("정답률_pct").map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
