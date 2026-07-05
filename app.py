@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.38
+성취수준별 평가결과 분석 웹앱 v1.39
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -39,6 +39,8 @@
 - v1.35: requirements.txt에 python-docx 의존성 누락 없이 반영
 - v1.36: 기본 AI 분석 결과를 일반 대기형 출력에서 실시간 스트리밍 출력으로 변경하고, 생성 완료 후 Word 다운로드 버튼 표시
 - v1.37: 기본 AI 분석 프롬프트 마지막에 원안지 기반 고급 분석이 필요한 문항을 우선순위로 추천하는 항목 추가
+- v1.38: AI 분석 결과를 session_state에 저장하여 Word 다운로드 버튼 클릭 시 앱 rerun으로 결과가 초기화되지 않도록 수정
+- v1.39: 고급 분석에서 업로드한 원안지 PDF를 OpenAI 파일 입력으로 연결하고, 원안지+통계 기반 심층 분석을 스트리밍 출력/Word 저장하도록 추가
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -70,7 +72,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.38"
+APP_VERSION = "v1.39"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -991,9 +993,7 @@ build_overall_ai_prompt = build_basic_statistics_ai_prompt
 
 
 def build_advanced_exam_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], pdf_name: str = "원안지 PDF") -> str:
-    """고급 분석: 원안지 기반 심층 해석용 프롬프트 초안.
-    실제 원안지 PDF 이미지/텍스트 연결 로직은 후속 버전에서 붙인다.
-    """
+    """고급 분석: 업로드한 원안지 PDF와 통계 결과를 연결해 심층 해석을 생성한다."""
     item = analysis["item"].copy().sort_values("정답률")
     domain = analysis["domain"].copy().sort_values("정답률")
     standard = analysis.get("standard", pd.DataFrame()).copy()
@@ -1007,12 +1007,12 @@ def build_advanced_exam_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], 
     return f"""
 너는 중학교 과학 평가 문항을 분석하는 교육평가 전문가이다.
 
-아래에는 원안지 자료와 평가 통계 결과가 함께 제공된다고 가정한다.
+아래에는 원안지 PDF 파일과 평가 통계 결과가 함께 제공된다.
 원안지의 문항 내용, 선택지 구성, 자료 제시 방식, 성취기준, 정답률, 선택지 반응률, 변별도, 성취수준별 정답률을 종합하여 시험 결과를 심층 분석하라.
 
 [원안지 파일]
 - 파일명: {pdf_name}
-- 실제 구현 단계에서는 이 PDF의 문항 이미지/텍스트가 문항번호와 연결되어 함께 제공된다.
+- 이 PDF 전체를 확인하고, 아래 통계 자료에서 우선 확인해야 할 문항을 찾아 문항 내용과 연결하라.
 
 [평가 정보]
 {exam}
@@ -1034,6 +1034,11 @@ def build_advanced_exam_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], 
 
 [예상 난이도와 실제 정답률 판정]
 {difficulty_gap[['문항번호','평가영역','예상난이도','기대정답률구간','정답률_pct','차이해석']].head(15).to_string(index=False) if not difficulty_gap.empty else '불일치 문항 없음'}
+
+[우선 확인 문항 후보]
+- 정답률이 낮은 문항, 예상 난이도와 실제 결과가 어긋난 문항, 변별도가 낮은 문항, 특정 오답 선택지에 응답이 몰린 문항, 성취기준별 정답률이 낮은 문항을 우선 확인하라.
+- 원안지 PDF에서 해당 문항을 찾아 문항 내용, 자료, 선지 구성과 통계 결과를 연결하라.
+- 후보가 많으면 의미 있는 문항을 충분히 다루되, 실제로 심층 분석 필요성이 낮은 문항은 억지로 포함하지 말라.
 
 다음 구조로 작성하라.
 1. 시험 전체 구성 분석
@@ -1137,6 +1142,53 @@ def call_openai_stream(api_key: str, model: str, prompt: str, placeholder) -> st
     with client.responses.stream(
         model=model,
         input=prompt,
+        max_output_tokens=16000,
+    ) as stream:
+        for event in stream:
+            event_type = getattr(event, "type", "")
+            if event_type == "response.output_text.delta":
+                delta = getattr(event, "delta", "") or ""
+                full_text += delta
+                placeholder.markdown(full_text + "▌")
+
+        final_response = stream.get_final_response()
+
+    final_text = (getattr(final_response, "output_text", "") or full_text).strip()
+    placeholder.markdown(final_text)
+    return final_text
+
+
+def call_openai_stream_with_pdf(api_key: str, model: str, prompt: str, pdf_bytes: bytes, pdf_name: str, placeholder) -> str:
+    """업로드한 원안지 PDF를 OpenAI 파일 입력으로 연결하고 스트리밍 분석 결과를 표시한다."""
+    if OpenAI is None:
+        raise RuntimeError("openai 라이브러리를 불러오지 못했습니다. requirements.txt에 openai가 포함되어 있는지 확인하세요.")
+
+    client = OpenAI(api_key=api_key)
+    file_obj = io.BytesIO(pdf_bytes)
+    file_obj.name = pdf_name
+
+    uploaded_file = client.files.create(
+        file=file_obj,
+        purpose="user_data",
+    )
+    file_id = getattr(uploaded_file, "id", None)
+    if not file_id:
+        raise RuntimeError("원안지 PDF 파일 업로드에 실패했습니다.")
+
+    full_text = ""
+    response_input = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_file", "file_id": file_id},
+                {"type": "input_text", "text": prompt},
+            ],
+        }
+    ]
+
+    with client.responses.stream(
+        model=model,
+        input=response_input,
         max_output_tokens=16000,
     ) as stream:
         for event in stream:
@@ -2149,7 +2201,7 @@ def main() -> None:
         with ai_tab_advanced:
             with st.container(border=True):
                 st.markdown("#### 고급 분석: 원안지 기반 심층 해석")
-                st.markdown("원안지 PDF를 업로드한 뒤, 문항 내용과 통계 결과를 연결해 심층 분석하는 영역입니다.")
+                st.markdown("원안지 PDF를 업로드한 뒤, 원안지 전체와 통계 결과를 함께 보내 문항 내용 기반 심층 분석을 생성합니다.")
                 source_pdf = st.file_uploader("원안지 PDF 업로드", type=["pdf"], key="source_exam_pdf")
                 advanced_scope = st.selectbox(
                     "고급 분석 범위",
@@ -2161,15 +2213,58 @@ def main() -> None:
                 advanced_prompt = advanced_prompt.replace("[원안지 파일]", f"[고급 분석 범위]\n- {advanced_scope}\n\n[원안지 파일]", 1)
 
             with st.container(border=True):
-                with st.expander("AI에 전달될 고급 분석 프롬프트 초안 확인", expanded=False):
-                    st.text_area("고급 분석 프롬프트 초안", advanced_prompt, height=460)
+                with st.expander("AI에 전달될 고급 분석 프롬프트 확인", expanded=False):
+                    st.text_area("고급 분석 프롬프트", advanced_prompt, height=460)
+
+                adv_result_state_key = "advanced_ai_result_text"
+                adv_docx_state_key = "advanced_ai_docx_bytes"
+                adv_filename_state_key = "advanced_ai_docx_filename"
+                adv_meta_state_key = "advanced_ai_result_meta"
+
                 if source_pdf is None:
-                    st.info("고급 분석 실행은 원안지 PDF 업로드 후 사용할 수 있습니다. PDF 문항 추출/문항번호 연결 로직은 후속 업데이트에서 채웁니다.")
+                    st.info("원안지 PDF를 업로드하면 고급 분석을 실행할 수 있습니다.")
+
                 if st.button("고급 분석 실행", type="primary", key="run_advanced_ai", disabled=(source_pdf is None)):
                     if not api_key:
                         st.error("OpenAI API Key를 입력하세요.")
                     else:
-                        st.warning("현재 버전은 고급 분석 UI와 프롬프트 구조만 반영되어 있습니다. 원안지 PDF 내용 추출 및 문항별 연결 로직을 먼저 완성해야 실제 원안지 기반 분석이 가능합니다.")
+                        try:
+                            st.session_state.pop(adv_result_state_key, None)
+                            st.session_state.pop(adv_docx_state_key, None)
+                            st.session_state.pop(adv_filename_state_key, None)
+                            st.session_state.pop(adv_meta_state_key, None)
+
+                            pdf_bytes = source_pdf.getvalue()
+                            st.markdown("#### 고급 분석 결과")
+                            st.caption("원안지 PDF와 통계 자료를 함께 분석하며, 결과가 생성되는 대로 실시간으로 표시됩니다.")
+                            result_placeholder = st.empty()
+                            result = call_openai_stream_with_pdf(api_key, model, advanced_prompt, pdf_bytes, source_pdf.name, result_placeholder)
+
+                            if len(result.strip()) < 300:
+                                st.warning("AI 응답이 예상보다 짧습니다. PDF 인식, 모델 출력 제한, API 오류, 프롬프트 입력량을 확인해 주세요.")
+
+                            report_title = "성취수준별 평가결과 원안지 기반 고급 분석 보고서"
+                            report_type = f"고급 분석: {advanced_scope}"
+                            docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type)
+
+                            st.session_state[adv_result_state_key] = result
+                            st.session_state[adv_docx_state_key] = docx_bytes
+                            st.session_state[adv_filename_state_key] = "AI_고급분석_원안지기반심층해석.docx"
+                            st.session_state[adv_meta_state_key] = report_type
+                        except Exception as e:
+                            st.error(f"고급 분석 중 오류가 발생했습니다: {e}")
+
+                if st.session_state.get(adv_result_state_key):
+                    st.markdown("#### 저장된 고급 분석 결과")
+                    st.markdown(st.session_state[adv_result_state_key])
+                    st.download_button(
+                        "고급 분석 결과 Word 다운로드",
+                        st.session_state[adv_docx_state_key],
+                        st.session_state.get(adv_filename_state_key, "AI_고급분석_원안지기반심층해석.docx"),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                        key="download_advanced_ai_docx_persisted",
+                    )
 
     st.subheader("4. 다운로드")
     d1, d2 = st.columns(2)
