@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.27
+성취수준별 평가결과 분석 웹앱 v1.28
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -30,6 +30,7 @@
 - v1.25: 난이도 일치 여부 영역을 카드형으로 정리하고 기준 입력/요약 지표의 가시성 개선
 - v1.26: 데이터 확인·성취도·학급별·평가영역별·성취수준별·학생 개별·AI 분석 탭의 주요 항목을 카드형 박스로 정리
 - v1.27: 평가영역별 분석 옆에 성취기준별 분석 탭을 추가하고, 성취기준별 정답률/학생별 점수를 표시
+- v1.28: 평가영역별/성취기준별 개인별 분석을 전체 나열 대신 반·학생 선택 후 해당 학생 표만 표시
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -59,7 +60,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.27"
+APP_VERSION = "v1.28"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -718,6 +719,9 @@ def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, flo
         영역배점=("배점", "sum"),
         영역정답률=("정답여부", "mean"),
     ).reset_index()
+    student_meta = students[["반/번호", "반", "번호", "이름"]].drop_duplicates("반/번호")
+    domain_scores = student_meta.merge(domain_scores, on="반/번호", how="right")
+    domain_scores["영역환산점수"] = np.where(domain_scores["영역배점"] > 0, domain_scores["영역점수"] / domain_scores["영역배점"] * 100, np.nan)
     domain_max = qdf.groupby("평가영역", dropna=False).agg(
         문항수=("문항번호", "nunique"),
         배점합계=("배점", "sum"),
@@ -739,6 +743,8 @@ def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, flo
         성취기준배점=("배점", "sum"),
         성취기준정답률=("정답여부", "mean"),
     ).reset_index()
+    standard_scores = student_meta.merge(standard_scores, on="반/번호", how="right")
+    standard_scores["성취기준환산점수"] = np.where(standard_scores["성취기준배점"] > 0, standard_scores["성취기준점수"] / standard_scores["성취기준배점"] * 100, np.nan)
     standard_max = qdf.groupby("성취기준", dropna=False).agg(
         문항수=("문항번호", "nunique"),
         배점합계=("배점", "sum"),
@@ -1128,6 +1134,38 @@ def ai_percent_df(df: pd.DataFrame, digits: int = 1) -> pd.DataFrame:
     """AI 프롬프트용: 비율값을 % 문자열로 변환하고 단위 헤더를 붙인다."""
     return format_output_df(df, digits=digits, add_units=True)
 
+
+
+def render_student_selector(individual_df: pd.DataFrame, key_prefix: str) -> Optional[str]:
+    """반과 학생을 선택하고 선택 학생의 반/번호를 반환한다."""
+    if individual_df.empty:
+        st.info("학생 데이터가 없습니다.")
+        return None
+
+    selector_df = individual_df.copy()
+    selector_df["반"] = pd.to_numeric(selector_df["반"], errors="coerce")
+    selector_df["번호"] = pd.to_numeric(selector_df["번호"], errors="coerce")
+    class_values = sorted([int(x) for x in selector_df["반"].dropna().unique()])
+    if not class_values:
+        st.info("선택할 수 있는 반 정보가 없습니다.")
+        return None
+
+    left, right = st.columns([1, 2])
+    with left:
+        selected_class = st.selectbox("반 선택", class_values, format_func=lambda x: f"{x}반", key=f"{key_prefix}_class")
+    class_students = selector_df[selector_df["반"] == selected_class].copy().sort_values(["번호", "이름"], na_position="last")
+    if class_students.empty:
+        st.info("선택한 반의 학생 데이터가 없습니다.")
+        return None
+
+    class_students["선택표시"] = class_students.apply(
+        lambda r: f"{int(r['번호'])}번 {r['이름']}" if pd.notna(r.get("번호")) else f"{r.get('반/번호', '')} {r.get('이름', '')}",
+        axis=1,
+    )
+    options = class_students["반/번호"].tolist()
+    label_map = dict(zip(class_students["반/번호"], class_students["선택표시"]))
+    with right:
+        return st.selectbox("학생 선택", options, format_func=lambda x: label_map.get(x, x), key=f"{key_prefix}_student")
 
 def main() -> None:
     st.set_page_config(page_title="성취수준별 평가결과 분석 웹앱", layout="wide")
@@ -1705,8 +1743,12 @@ def main() -> None:
             st.markdown("#### 평가영역별 분석")
             st.dataframe(fmt_percent_df(analysis["domain"].sort_values("정답률")), use_container_width=True, height=420)
         with st.container(border=True):
-            st.markdown("#### 학생별 평가영역 점수")
-            st.dataframe(fmt_percent_df(analysis["domain_scores"]), use_container_width=True, height=360)
+            st.markdown("#### 개인별 평가영역 분석")
+            selected_student_domain = render_student_selector(analysis["individual"], "domain_individual")
+            if selected_student_domain:
+                domain_one = analysis["domain_scores"][analysis["domain_scores"]["반/번호"] == selected_student_domain].copy()
+                domain_cols = [c for c in ["평가영역", "영역점수", "영역배점", "영역환산점수", "영역정답률"] if c in domain_one.columns]
+                st.dataframe(fmt_percent_df(domain_one[domain_cols].sort_values("평가영역")), use_container_width=True, height=260, hide_index=True)
 
     with tab5:
         with st.container(border=True):
@@ -1714,8 +1756,18 @@ def main() -> None:
             standard_cols = [c for c in ["성취기준", "평가영역", "문항번호", "문항수", "배점합계", "평균점수", "환산평균", "정답률"] if c in analysis["standard"].columns]
             st.dataframe(fmt_percent_df(analysis["standard"][standard_cols].sort_values("정답률")), use_container_width=True, height=520, hide_index=True)
         with st.container(border=True):
-            st.markdown("#### 학생별 성취기준 점수")
-            st.dataframe(fmt_percent_df(analysis["standard_scores"].sort_values(["성취기준", "반/번호"])), use_container_width=True, height=360)
+            st.markdown("#### 개인별 성취기준 분석")
+            selected_student_standard = render_student_selector(analysis["individual"], "standard_individual")
+            if selected_student_standard:
+                standard_one = analysis["standard_scores"][analysis["standard_scores"]["반/번호"] == selected_student_standard].copy()
+                standard_one = standard_one.merge(
+                    analysis["standard"][["성취기준", "평가영역", "문항번호"]],
+                    on="성취기준",
+                    how="left",
+                )
+                standard_one = standard_one.rename(columns={"평가영역_y": "평가영역", "평가영역_x": "학생평가영역"})
+                standard_cols_one = [c for c in ["성취기준", "평가영역", "문항번호", "성취기준점수", "성취기준배점", "성취기준환산점수", "성취기준정답률"] if c in standard_one.columns]
+                st.dataframe(fmt_percent_df(standard_one[standard_cols_one].sort_values("성취기준")), use_container_width=True, height=360, hide_index=True)
 
     with tab6:
         with st.container(border=True):
