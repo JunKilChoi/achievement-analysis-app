@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.8
+성취수준별 평가결과 분석 웹앱 v1.9
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -11,6 +11,7 @@
 - v1.6: 성취도 분석 탭에 학급별 최고·최저·평균 그래프와 선택 학급 성취수준 분포 그래프 추가
 - v1.7: matplotlib 의존성 제거, Streamlit 기본 차트로 성취도 분석 그래프 표시
 - v1.8: 성취도 분석 탭의 전체 분석 그래프를 최고점·최저점·평균 캔들형으로 변경하고, 전체/개별 반 그래프를 좌우 배치
+- v1.9: 전체 분석 캔들형 그래프의 최고·최저 범위선과 평균점을 강조하고, “한 반 분석” 용어를 “개별 반 분석”으로 변경
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -1017,30 +1018,88 @@ def main() -> None:
                 st.vega_lite_chart(
                     chart_data,
                     {
-                        "height": 340,
+                        "height": 360,
+                        "config": {
+                            "axis": {"labelFontSize": 12, "titleFontSize": 13, "grid": True},
+                            "view": {"stroke": "transparent"},
+                        },
                         "layer": [
                             {
-                                "mark": {"type": "rule", "strokeWidth": 3},
+                                "mark": {
+                                    "type": "rule",
+                                    "strokeWidth": 7,
+                                    "color": "#2F3A4A",
+                                    "opacity": 0.95,
+                                },
                                 "encoding": {
-                                    "x": {"field": "학급", "type": "ordinal", "sort": None, "axis": {"title": "학급"}},
-                                    "y": {"field": "최저점", "type": "quantitative", "axis": {"title": "점수"}},
+                                    "x": {
+                                        "field": "학급",
+                                        "type": "ordinal",
+                                        "sort": None,
+                                        "axis": {"title": "학급", "labelAngle": 0},
+                                    },
+                                    "y": {
+                                        "field": "최저점",
+                                        "type": "quantitative",
+                                        "axis": {"title": "점수"},
+                                        "scale": {"zero": False},
+                                    },
                                     "y2": {"field": "최고점"},
                                     "tooltip": [
-                                        {"field": "학급", "type": "ordinal"},
-                                        {"field": "최고점", "type": "quantitative", "format": ".1f"},
-                                        {"field": "평균", "type": "quantitative", "format": ".1f"},
-                                        {"field": "최저점", "type": "quantitative", "format": ".1f"},
+                                        {"field": "학급", "type": "ordinal", "title": "학급"},
+                                        {"field": "최고점", "type": "quantitative", "format": ".1f", "title": "최고점"},
+                                        {"field": "평균", "type": "quantitative", "format": ".1f", "title": "평균"},
+                                        {"field": "최저점", "type": "quantitative", "format": ".1f", "title": "최저점"},
                                     ],
                                 },
                             },
                             {
-                                "mark": {"type": "point", "filled": True, "size": 90},
+                                "mark": {
+                                    "type": "tick",
+                                    "thickness": 4,
+                                    "size": 26,
+                                    "color": "#111827",
+                                },
+                                "encoding": {
+                                    "x": {"field": "학급", "type": "ordinal", "sort": None},
+                                    "y": {"field": "최고점", "type": "quantitative"},
+                                    "tooltip": [
+                                        {"field": "학급", "type": "ordinal", "title": "학급"},
+                                        {"field": "최고점", "type": "quantitative", "format": ".1f", "title": "최고점"},
+                                    ],
+                                },
+                            },
+                            {
+                                "mark": {
+                                    "type": "tick",
+                                    "thickness": 4,
+                                    "size": 26,
+                                    "color": "#111827",
+                                },
+                                "encoding": {
+                                    "x": {"field": "학급", "type": "ordinal", "sort": None},
+                                    "y": {"field": "최저점", "type": "quantitative"},
+                                    "tooltip": [
+                                        {"field": "학급", "type": "ordinal", "title": "학급"},
+                                        {"field": "최저점", "type": "quantitative", "format": ".1f", "title": "최저점"},
+                                    ],
+                                },
+                            },
+                            {
+                                "mark": {
+                                    "type": "point",
+                                    "filled": True,
+                                    "size": 210,
+                                    "color": "#E11D48",
+                                    "stroke": "white",
+                                    "strokeWidth": 2.5,
+                                },
                                 "encoding": {
                                     "x": {"field": "학급", "type": "ordinal", "sort": None},
                                     "y": {"field": "평균", "type": "quantitative"},
                                     "tooltip": [
-                                        {"field": "학급", "type": "ordinal"},
-                                        {"field": "평균", "type": "quantitative", "format": ".1f"},
+                                        {"field": "학급", "type": "ordinal", "title": "학급"},
+                                        {"field": "평균", "type": "quantitative", "format": ".1f", "title": "평균"},
                                     ],
                                 },
                             },
@@ -1052,7 +1111,7 @@ def main() -> None:
                 st.info("표시할 학급별 점수 데이터가 없습니다.")
 
         with graph_col2:
-            st.markdown("#### 한 반 분석 그래프")
+            st.markdown("#### 개별 반 분석 그래프")
             class_values = sorted(analysis["individual"]["반"].dropna().unique().tolist())
             if class_values:
                 selected_class_for_graph = st.selectbox(
