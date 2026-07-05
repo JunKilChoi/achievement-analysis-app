@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.17
+성취수준별 평가결과 분석 웹앱 v1.18
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -20,6 +20,7 @@
 - v1.15: 전체 분석 항아리형 그래프의 최고점·최저점 범위선 끝에 최고/최저 라벨과 점수 표시 추가
 - v1.16: 전체 분석 항아리형 그래프에 평균점수 라벨을 추가하고, 점수 구간 툴팁을 한 줄 표시로 정리
 - v1.17: 개별 반 분석 그래프의 학생수 축을 0 이상 고정하고, 확대/축소형 상호작용을 제거하며 성취수준 비율 표시 오류 수정
+- v1.18: 문항별 분석 탭에 예상 난이도와 실제 정답률 기준 난이도의 괴리 분석, 기준 조절, 괴리 문항 강조 기능 추가
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -49,7 +50,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.17"
+APP_VERSION = "v1.18"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -547,6 +548,65 @@ def item_discrimination(long_df: pd.DataFrame, student_scores: pd.DataFrame) -> 
     return pd.DataFrame(rows)
 
 
+DIFFICULTY_SCORE = {"어려움": 1, "보통": 2, "쉬움": 3}
+
+
+def normalize_difficulty_value(value: Any) -> str:
+    text = clean_text(value)
+    if text in DIFFICULTY_SCORE:
+        return text
+    if "어려" in text:
+        return "어려움"
+    if "보통" in text or "중" == text:
+        return "보통"
+    if "쉬" in text:
+        return "쉬움"
+    return ""
+
+
+def actual_difficulty_from_rate(rate: Any, hard_cut_percent: float, easy_cut_percent: float) -> str:
+    r = pd.to_numeric(pd.Series([rate]), errors="coerce").iloc[0]
+    if pd.isna(r):
+        return ""
+    percent = float(r) * 100
+    if percent < hard_cut_percent:
+        return "어려움"
+    if percent < easy_cut_percent:
+        return "보통"
+    return "쉬움"
+
+
+def difficulty_gap_label(gap: Any) -> str:
+    if pd.isna(gap):
+        return "비교 불가"
+    gap = int(gap)
+    if gap == 0:
+        return "일치"
+    if gap == 1:
+        return "예상보다 쉬움"
+    if gap >= 2:
+        return "예상보다 훨씬 쉬움"
+    if gap == -1:
+        return "예상보다 어려움"
+    return "예상보다 훨씬 어려움"
+
+
+def make_difficulty_gap_analysis(item_df: pd.DataFrame, hard_cut_percent: float = 33.0, easy_cut_percent: float = 66.0) -> pd.DataFrame:
+    out = item_df.copy()
+    out["예상난이도"] = out.get("난이도", "").apply(normalize_difficulty_value) if "난이도" in out.columns else ""
+    out["실제난이도"] = out["정답률"].apply(lambda x: actual_difficulty_from_rate(x, hard_cut_percent, easy_cut_percent))
+    out["예상난이도점수"] = out["예상난이도"].map(DIFFICULTY_SCORE)
+    out["실제난이도점수"] = out["실제난이도"].map(DIFFICULTY_SCORE)
+    out["난이도괴리단계"] = out["실제난이도점수"] - out["예상난이도점수"]
+    out["괴리해석"] = out["난이도괴리단계"].apply(difficulty_gap_label)
+    out["괴리여부"] = np.where(out["난이도괴리단계"].isna(), "비교 불가", np.where(out["난이도괴리단계"] == 0, "일치", "괴리"))
+    keep_cols = [
+        "문항번호", "평가영역", "예상난이도", "정답률", "실제난이도",
+        "괴리여부", "괴리해석", "난이도괴리단계", "배점", "정답", "변별도"
+    ]
+    return out[[c for c in keep_cols if c in out.columns]].sort_values(["괴리여부", "난이도괴리단계", "문항번호"], ascending=[True, True, True])
+
+
 def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, float]) -> Dict[str, pd.DataFrame | float | None]:
     qdf, sdf0, long_df0 = parsed.question_df.copy(), parsed.students_df.copy(), parsed.long_df.copy()
     students = add_student_scores(sdf0, long_df0, total_full_score, cuts)
@@ -584,6 +644,9 @@ def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, flo
         col = f"선택지{opt}비율" if opt != "무표기" else "무표기비율"
         rates = long_df.assign(_sel=long_df["선택지"].astype(str)).groupby("문항번호").apply(lambda g, o=str(opt): (g["_sel"] == o).mean()).reset_index(name=col)
         item = item.merge(rates, on="문항번호", how="left")
+
+    # 예상 난이도-실제 난이도 기본 괴리 분석
+    difficulty_gap = make_difficulty_gap_analysis(item, hard_cut_percent=33.0, easy_cut_percent=66.0)
 
     # 학급별 분석
     class_item = long_df.groupby(["반", "문항번호"]).agg(응시자수=("반/번호", "count"), 정답률=("정답여부", "mean"), 평균점수=("점수", "mean")).reset_index()
@@ -633,6 +696,7 @@ def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, flo
         "achievement": achievement,
         "class_achievement": class_achievement,
         "item": item,
+        "difficulty_gap": difficulty_gap,
         "class_item": class_item,
         "class_item_pivot": class_item_pivot,
         "domain": domain,
@@ -699,6 +763,7 @@ def make_analysis_zip(parsed: ParsedData, analysis: Dict[str, Any]) -> bytes:
         },
         "선다형분석_문항별.xlsx": {
             "문항별분석": analysis["item"],
+            "난이도괴리분석": analysis.get("difficulty_gap", pd.DataFrame()),
             "응답긴자료": analysis["long"],
         },
         "선다형분석_학급별.xlsx": {
@@ -728,6 +793,11 @@ def build_overall_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any]) -> str
     item = analysis["item"].copy().sort_values("정답률")
     domain = analysis["domain"].copy().sort_values("정답률")
     level_item = analysis["level_item"].copy().sort_values("정답률")
+    difficulty_gap = analysis.get("difficulty_gap", pd.DataFrame()).copy()
+    if not difficulty_gap.empty:
+        difficulty_gap = difficulty_gap[difficulty_gap["괴리여부"] == "괴리"].copy()
+        difficulty_gap["괴리절댓값"] = pd.to_numeric(difficulty_gap["난이도괴리단계"], errors="coerce").abs()
+        difficulty_gap = difficulty_gap.sort_values(["괴리절댓값", "정답률"], ascending=[False, True])
     alpha = analysis.get("alpha")
     exam = parsed.exam_info
     return f"""
@@ -749,6 +819,9 @@ def build_overall_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any]) -> str
 
 [성취수준별 문항 분석 중 정답률 낮은 문항]
 {ai_percent_df(level_item[['문항번호','평가영역','정답률','A','B','C','D','E','수준간격차']].head(10)).to_string(index=False)}
+
+[예상 난이도와 실제 정답률 기준 난이도가 다른 문항]
+{ai_percent_df(difficulty_gap[['문항번호','평가영역','예상난이도','정답률','실제난이도','괴리해석','난이도괴리단계']].head(10)).to_string(index=False) if not difficulty_gap.empty else '괴리 문항 없음'}
 
 다음 형식으로 작성하라.
 1. 전체 성취도 요약
@@ -1397,7 +1470,97 @@ def main() -> None:
 
     with tab2:
         st.markdown("정답률과 변별도를 기준으로 취약 문항을 먼저 확인할 수 있습니다.")
-        st.dataframe(fmt_percent_df(analysis["item"].sort_values("정답률")), use_container_width=True, height=520)
+        st.dataframe(fmt_percent_df(analysis["item"].sort_values("정답률")), use_container_width=True, height=420)
+
+        st.markdown("#### 예상 난이도-실제 정답률 괴리 분석")
+        hard_cut, easy_cut = st.slider(
+            "실제 정답률 기준 조절",
+            min_value=0,
+            max_value=100,
+            value=(33, 66),
+            step=1,
+            help="정답률이 첫 번째 기준 미만이면 어려움, 첫 번째 이상 두 번째 미만이면 보통, 두 번째 이상이면 쉬움으로 분류합니다.",
+        )
+        difficulty_gap_df = make_difficulty_gap_analysis(analysis["item"], hard_cut_percent=float(hard_cut), easy_cut_percent=float(easy_cut))
+        analysis["difficulty_gap"] = difficulty_gap_df
+
+        gap_only = st.checkbox("괴리 문항만 보기", value=True)
+        gap_view_df = difficulty_gap_df[difficulty_gap_df["괴리여부"] == "괴리"].copy() if gap_only else difficulty_gap_df.copy()
+
+        g1, g2, g3 = st.columns(3)
+        g1.metric("전체 문항수(개)", f"{len(difficulty_gap_df)}")
+        g2.metric("괴리 문항수(개)", f"{int((difficulty_gap_df['괴리여부'] == '괴리').sum())}")
+        gap_rate = (difficulty_gap_df["괴리여부"] == "괴리").mean() if len(difficulty_gap_df) else 0
+        g3.metric("괴리 비율(%)", f"{gap_rate * 100:.1f}%")
+
+        chart_gap_df = difficulty_gap_df.copy()
+        chart_gap_df["문항"] = chart_gap_df["문항번호"].astype(str)
+        chart_gap_df["정답률_pct"] = pd.to_numeric(chart_gap_df["정답률"], errors="coerce") * 100
+        chart_gap_df["툴팁정답률"] = chart_gap_df["정답률_pct"].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
+        threshold_df = pd.DataFrame({
+            "기준": ["어려움/보통", "보통/쉬움"],
+            "정답률_pct": [float(hard_cut), float(easy_cut)],
+        })
+
+        st.vega_lite_chart(
+            {"items": chart_gap_df, "thresholds": threshold_df},
+            {
+                "height": 330,
+                "width": "container",
+                "config": {
+                    "axis": {"labelFontSize": 12, "titleFontSize": 13, "grid": True},
+                    "view": {"stroke": "transparent"},
+                    "legend": {"orient": "top"},
+                },
+                "layer": [
+                    {
+                        "data": {"name": "items"},
+                        "mark": {"type": "bar", "cornerRadiusTopLeft": 4, "cornerRadiusTopRight": 4},
+                        "encoding": {
+                            "x": {"field": "문항", "type": "ordinal", "axis": {"title": "문항번호", "labelAngle": 0}},
+                            "y": {
+                                "field": "정답률_pct",
+                                "type": "quantitative",
+                                "axis": {"title": "정답률(%)"},
+                                "scale": {"domain": [0, 100], "nice": False},
+                            },
+                            "color": {"field": "괴리여부", "type": "nominal", "title": "괴리 여부"},
+                            "tooltip": [
+                                {"field": "문항번호", "type": "ordinal", "title": "문항번호"},
+                                {"field": "평가영역", "type": "nominal", "title": "평가영역"},
+                                {"field": "예상난이도", "type": "nominal", "title": "예상 난이도"},
+                                {"field": "툴팁정답률", "type": "nominal", "title": "실제 정답률"},
+                                {"field": "실제난이도", "type": "nominal", "title": "실제 난이도"},
+                                {"field": "괴리해석", "type": "nominal", "title": "괴리 해석"},
+                            ],
+                        },
+                    },
+                    {
+                        "data": {"name": "thresholds"},
+                        "mark": {"type": "rule", "strokeDash": [6, 4], "strokeWidth": 2},
+                        "encoding": {
+                            "y": {"field": "정답률_pct", "type": "quantitative"},
+                            "tooltip": [
+                                {"field": "기준", "type": "nominal", "title": "기준"},
+                                {"field": "정답률_pct", "type": "quantitative", "title": "정답률(%)", "format": ".0f"},
+                            ],
+                        },
+                    },
+                    {
+                        "data": {"name": "thresholds"},
+                        "mark": {"type": "text", "align": "left", "baseline": "bottom", "dx": 4, "dy": -2, "fontSize": 12},
+                        "encoding": {
+                            "x": {"value": 0},
+                            "y": {"field": "정답률_pct", "type": "quantitative"},
+                            "text": {"field": "기준", "type": "nominal"},
+                        },
+                    },
+                ],
+            },
+            use_container_width=True,
+        )
+
+        st.dataframe(fmt_percent_df(gap_view_df), use_container_width=True, height=360, hide_index=True)
 
     with tab3:
         st.dataframe(fmt_percent_df(analysis["class_item_pivot"]), use_container_width=True, height=520)
