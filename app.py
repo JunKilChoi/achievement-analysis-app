@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.34
+성취수준별 평가결과 분석 웹앱 v1.36
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -36,6 +36,8 @@
 - v1.31: 기본/고급 AI 분석 max_output_tokens를 16000으로 확대
 - v1.32: 기본 AI 분석 프롬프트를 통계 기반 진단 중심으로 개편하고, 고급 분석 필요 문항 추천 항목 추가
 - v1.33: 기본 AI 분석 프롬프트를 이전 해석형 구조로 복원하고, 선택지 반응 및 오답 경향 분석 항목 추가
+- v1.35: requirements.txt에 python-docx 의존성 누락 없이 반영
+- v1.36: 기본 AI 분석 결과를 일반 대기형 출력에서 실시간 스트리밍 출력으로 변경하고, 생성 완료 후 Word 다운로드 버튼 표시
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -67,7 +69,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.34"
+APP_VERSION = "v1.36"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1117,6 +1119,33 @@ def call_openai(api_key: str, model: str, prompt: str) -> str:
     return getattr(resp, "output_text", "").strip()
 
 
+def call_openai_stream(api_key: str, model: str, prompt: str, placeholder) -> str:
+    """OpenAI Responses API를 스트리밍으로 호출하고, 생성 중인 본문을 화면에 즉시 표시한다."""
+    if OpenAI is None:
+        raise RuntimeError("openai 라이브러리를 불러오지 못했습니다. requirements.txt에 openai가 포함되어 있는지 확인하세요.")
+
+    client = OpenAI(api_key=api_key)
+    full_text = ""
+
+    with client.responses.stream(
+        model=model,
+        input=prompt,
+        max_output_tokens=16000,
+    ) as stream:
+        for event in stream:
+            event_type = getattr(event, "type", "")
+            if event_type == "response.output_text.delta":
+                delta = getattr(event, "delta", "") or ""
+                full_text += delta
+                placeholder.markdown(full_text + "▌")
+
+        final_response = stream.get_final_response()
+
+    final_text = (getattr(final_response, "output_text", "") or full_text).strip()
+    placeholder.markdown(final_text)
+    return final_text
+
+
 
 
 def make_ai_report_docx(parsed: ParsedData, analysis: Dict[str, Any], report_title: str, report_body: str, report_type: str = "AI 분석") -> bytes:
@@ -2067,23 +2096,27 @@ def main() -> None:
                     if not api_key:
                         st.error("OpenAI API Key를 입력하세요.")
                     else:
-                        with st.spinner("기본 분석을 생성하는 중입니다..."):
-                            try:
-                                result = call_openai(api_key, model, basic_prompt)
-                                st.markdown("#### 기본 분석 결과")
-                                st.write(result)
-                                report_title = "성취수준별 평가결과 AI 분석 보고서"
-                                report_type = f"기본 분석: {basic_mode}"
-                                docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type)
-                                st.download_button(
-                                    "기본 분석 결과 Word 다운로드",
-                                    docx_bytes,
-                                    basic_download_name,
-                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    use_container_width=True,
-                                )
-                            except Exception as e:
-                                st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
+                        try:
+                            st.markdown("#### 기본 분석 결과")
+                            st.caption("분석 결과가 생성되는 대로 아래에 실시간으로 표시됩니다.")
+                            result_placeholder = st.empty()
+                            result = call_openai_stream(api_key, model, basic_prompt, result_placeholder)
+
+                            if len(result.strip()) < 300:
+                                st.warning("AI 응답이 예상보다 짧습니다. 모델 출력 제한, API 오류, 프롬프트 입력량을 확인해 주세요.")
+
+                            report_title = "성취수준별 평가결과 AI 분석 보고서"
+                            report_type = f"기본 분석: {basic_mode}"
+                            docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type)
+                            st.download_button(
+                                "기본 분석 결과 Word 다운로드",
+                                docx_bytes,
+                                basic_download_name,
+                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True,
+                            )
+                        except Exception as e:
+                            st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
 
         with ai_tab_advanced:
             with st.container(border=True):
