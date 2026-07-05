@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.26
+성취수준별 평가결과 분석 웹앱 v1.27
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -29,6 +29,7 @@
 - v1.24: 난이도 괴리 분석 기준 입력을 어려움/보통 난이도 구분 정답률, 보통/쉬움 난이도 구분 정답률로 분리
 - v1.25: 난이도 일치 여부 영역을 카드형으로 정리하고 기준 입력/요약 지표의 가시성 개선
 - v1.26: 데이터 확인·성취도·학급별·평가영역별·성취수준별·학생 개별·AI 분석 탭의 주요 항목을 카드형 박스로 정리
+- v1.27: 평가영역별 분석 옆에 성취기준별 분석 탭을 추가하고, 성취기준별 정답률/학생별 점수를 표시
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -58,7 +59,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.26"
+APP_VERSION = "v1.27"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -729,6 +730,29 @@ def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, flo
     domain = domain_max.merge(domain_avg, on="평가영역", how="left").merge(domain_rate, on="평가영역", how="left")
     domain["환산평균"] = np.where(domain["배점합계"] > 0, domain["평균점수"] / domain["배점합계"] * 100, np.nan)
 
+    # 성취기준별 분석
+    # 같은 성취기준에 속한 문항을 묶어 문항 수, 배점, 평균점수, 정답률을 계산한다.
+    long_df["성취기준"] = long_df["성취기준"].fillna("").astype(str).str.strip().replace("", "미입력")
+    qdf["성취기준"] = qdf["성취기준"].fillna("").astype(str).str.strip().replace("", "미입력")
+    standard_scores = long_df.groupby(["반/번호", "성취기준"]).agg(
+        성취기준점수=("점수", "sum"),
+        성취기준배점=("배점", "sum"),
+        성취기준정답률=("정답여부", "mean"),
+    ).reset_index()
+    standard_max = qdf.groupby("성취기준", dropna=False).agg(
+        문항수=("문항번호", "nunique"),
+        배점합계=("배점", "sum"),
+        문항번호=("문항번호", lambda s: ", ".join(map(str, sorted(pd.to_numeric(s, errors="coerce").dropna().astype(int).unique())))),
+        평가영역=("평가영역", lambda s: ", ".join(map(str, sorted(set(str(x).strip() for x in s if str(x).strip()))))),
+    ).reset_index()
+    standard_avg = standard_scores.groupby("성취기준", dropna=False).agg(
+        평균점수=("성취기준점수", "mean"),
+        평균정답률=("성취기준정답률", "mean"),
+    ).reset_index()
+    standard_rate = long_df.groupby("성취기준", dropna=False).agg(정답률=("정답여부", "mean")).reset_index()
+    standard = standard_max.merge(standard_avg, on="성취기준", how="left").merge(standard_rate, on="성취기준", how="left")
+    standard["환산평균"] = np.where(standard["배점합계"] > 0, standard["평균점수"] / standard["배점합계"] * 100, np.nan)
+
     # 성취수준별 문항 분석
     level_item = long_df.groupby(["성취수준", "문항번호"]).agg(응시자수=("반/번호", "count"), 정답률=("정답여부", "mean")).reset_index()
     level_item_pivot = level_item.pivot(index="문항번호", columns="성취수준", values="정답률").reset_index()
@@ -756,6 +780,8 @@ def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, flo
         "class_item": class_item,
         "class_item_pivot": class_item_pivot,
         "domain": domain,
+        "standard": standard,
+        "standard_scores": standard_scores,
         "level_item": level_item_pivot,
         "domain_scores": domain_scores,
         "individual": individual,
@@ -804,6 +830,7 @@ def make_confirm_excel(parsed: ParsedData, analysis: Dict[str, Any]) -> bytes:
         "문항정보": parsed.question_df,
         "학생정오표": parsed.students_df,
         "학생점수": analysis["students"],
+        "성취기준별분석": analysis.get("standard", pd.DataFrame()),
         "검증결과": parsed.validation_df,
         "문항별긴자료": analysis["long"],
     }
@@ -829,6 +856,10 @@ def make_analysis_zip(parsed: ParsedData, analysis: Dict[str, Any]) -> bytes:
         "평가영역별분석.xlsx": {
             "영역별분석": analysis["domain"],
             "학생영역별": analysis["domain_scores"],
+        },
+        "성취기준별분석.xlsx": {
+            "성취기준별분석": analysis.get("standard", pd.DataFrame()),
+            "학생성취기준별": analysis.get("standard_scores", pd.DataFrame()),
         },
         "선다형분석_성취수준별.xlsx": {
             "성취수준별문항": analysis["level_item"],
@@ -1281,8 +1312,8 @@ def main() -> None:
     else:
         st.warning("문항정보표와 학생답 정오표의 정답/배점이 다른 문항이 있습니다. 검증결과 탭에서 확인하세요.")
 
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        "데이터 확인", "성취도 분석", "문항별 분석", "학급별 분석", "평가영역별 분석", "성취수준별 분석", "학생 개별", "AI 분석"
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+        "데이터 확인", "성취도 분석", "문항별 분석", "학급별 분석", "평가영역별 분석", "성취기준별 분석", "성취수준별 분석", "학생 개별", "AI 분석"
     ])
 
     with tab0:
@@ -1679,10 +1710,19 @@ def main() -> None:
 
     with tab5:
         with st.container(border=True):
+            st.markdown("#### 성취기준별 분석")
+            standard_cols = [c for c in ["성취기준", "평가영역", "문항번호", "문항수", "배점합계", "평균점수", "환산평균", "정답률"] if c in analysis["standard"].columns]
+            st.dataframe(fmt_percent_df(analysis["standard"][standard_cols].sort_values("정답률")), use_container_width=True, height=520, hide_index=True)
+        with st.container(border=True):
+            st.markdown("#### 학생별 성취기준 점수")
+            st.dataframe(fmt_percent_df(analysis["standard_scores"].sort_values(["성취기준", "반/번호"])), use_container_width=True, height=360)
+
+    with tab6:
+        with st.container(border=True):
             st.markdown("#### 성취수준별 문항 분석")
             st.dataframe(fmt_percent_df(analysis["level_item"].sort_values("정답률")), use_container_width=True, height=520)
 
-    with tab6:
+    with tab7:
         with st.container(border=True):
             st.markdown("학생 이름은 웹앱 내부 확인용입니다. AI 분석에 보낼 때는 익명화 옵션을 권장합니다.")
             st.dataframe(fmt_percent_df(analysis["individual"].sort_values(["반", "번호"])), use_container_width=True, height=420)
@@ -1692,7 +1732,7 @@ def main() -> None:
             one_long = analysis["long"][analysis["long"]["반/번호"] == selected_student]
             st.dataframe(fmt_percent_df(one_long[["문항번호", "평가영역", "난이도", "배점", "정답", "원본표시", "선택지", "정오", "점수", "성취기준"]]), use_container_width=True, height=360)
 
-    with tab7:
+    with tab8:
         with st.container(border=True):
             st.markdown("AI 분석은 선택 기능입니다. 학생 개별 분석을 사용할 때는 개인정보 제공 범위를 반드시 확인하세요.")
             api_key = st.text_input("OpenAI API Key", type="password")
