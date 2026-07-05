@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.39
+성취수준별 평가결과 분석 웹앱 v1.40
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -41,6 +41,8 @@
 - v1.37: 기본 AI 분석 프롬프트 마지막에 원안지 기반 고급 분석이 필요한 문항을 우선순위로 추천하는 항목 추가
 - v1.38: AI 분석 결과를 session_state에 저장하여 Word 다운로드 버튼 클릭 시 앱 rerun으로 결과가 초기화되지 않도록 수정
 - v1.39: 고급 분석에서 업로드한 원안지 PDF를 OpenAI 파일 입력으로 연결하고, 원안지+통계 기반 심층 분석을 스트리밍 출력/Word 저장하도록 추가
+
+- v1.40: 고급 분석에서 분석 유형별 문항번호 입력 기능을 추가하고, 원안지 기반 학생 개별 문항 분석에서 반·학생 선택 후 해당 학생의 전체 풀이 결과와 원안지를 함께 분석하도록 개선
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -72,7 +74,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.39"
+APP_VERSION = "v1.40"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -992,8 +994,90 @@ def build_basic_statistics_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any
 build_overall_ai_prompt = build_basic_statistics_ai_prompt
 
 
-def build_advanced_exam_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], pdf_name: str = "원안지 PDF") -> str:
+def parse_question_number_input(raw: str, max_question: Optional[int] = None) -> List[int]:
+    """쉼표/공백/범위(예: 3, 5-7)로 입력한 문항번호를 정수 목록으로 정리한다."""
+    if not raw:
+        return []
+    nums: List[int] = []
+    for part in re.split(r"[,\s]+", str(raw).strip()):
+        if not part:
+            continue
+        if re.fullmatch(r"\d+\s*[-~]\s*\d+", part):
+            a, b = re.split(r"[-~]", part)
+            a, b = int(a.strip()), int(b.strip())
+            if a <= b:
+                nums.extend(range(a, b + 1))
+            else:
+                nums.extend(range(b, a + 1))
+        elif re.fullmatch(r"\d+", part):
+            nums.append(int(part))
+    nums = sorted(set(nums))
+    if max_question is not None:
+        nums = [n for n in nums if 1 <= n <= max_question]
+    return nums
+
+
+def _advanced_scope_instruction(scope: str, item_numbers: List[int], student_label: Optional[str] = None) -> str:
+    item_text = ", ".join(f"{n}번" for n in item_numbers) if item_numbers else "지정 문항 없음"
+    if scope == "원안지 기반 전체 시험 분석":
+        return f"""
+[고급 분석 범위]
+- 분석 유형: 원안지 기반 전체 시험 분석
+- 사용자가 지정한 문항: {item_text}
+- 원안지 전체와 통계 결과를 함께 보며 시험 전체 구성, 문항 유형, 전체 성취도와 문항 구성의 관계를 중심으로 분석하라.
+- 문항번호가 지정되어 있으면 해당 문항은 전체 분석 안에서 반드시 별도로 언급하라.
+""".strip()
+    if scope == "주요 문항 집중 분석":
+        return f"""
+[고급 분석 범위]
+- 분석 유형: 주요 문항 집중 분석
+- 분석할 문항번호: {item_text}
+- 위 문항번호가 지정되어 있으면 반드시 해당 문항을 원안지에서 찾아 문항 내용, 자료, 선지, 정답률, 변별도, 성취기준과 연결해 분석하라.
+- 문항번호가 비어 있으면 통계 자료상 우선 확인 필요성이 큰 문항을 직접 선정해 분석하라.
+""".strip()
+    if scope == "오답 선택지 분석":
+        return f"""
+[고급 분석 범위]
+- 분석 유형: 오답 선택지 분석
+- 분석할 문항번호: {item_text}
+- 지정 문항의 선택지별 반응률과 원안지 선지 내용을 연결하여, 어떤 오답 선택지가 학생들에게 매력적으로 작용했을 가능성이 있는지 분석하라.
+- 문항번호가 비어 있으면 특정 오답 선택지 응답이 두드러진 문항을 우선 선정해 분석하라.
+""".strip()
+    if scope == "성취기준 적합성 분석":
+        return f"""
+[고급 분석 범위]
+- 분석 유형: 성취기준 적합성 분석
+- 사용자가 지정한 문항: {item_text}
+- 원안지 문항 내용과 문항정보표의 평가영역·성취기준이 실제로 잘 연결되는지 검토하라.
+- 문항번호가 지정되어 있으면 해당 문항을 우선 분석하고, 비어 있으면 성취기준별 정답률이 낮거나 문항 구성상 검토 필요성이 큰 문항을 중심으로 분석하라.
+""".strip()
+    if scope == "원안지 기반 학생 개별 분석":
+        return f"""
+[고급 분석 범위]
+- 분석 유형: 원안지 기반 학생 개별 문항 분석
+- 분석 대상 학생: {student_label or '선택 학생'}
+- 분석할 문항번호: {item_text if item_numbers else '학생의 전체 풀이 결과를 기준으로 오답·취약 문항 전체'}
+- 선택 학생의 전체 문제 풀이 결과와 원안지를 함께 보고, 맞힌 문항/틀린 문항/성취기준/문항 내용을 연결하여 학생의 강점, 취약점, 보충 지도 방향을 분석하라.
+- 문항번호가 지정되어 있으면 해당 문항을 우선 분석하고, 비어 있으면 학생의 오답 문항과 취약 성취기준을 중심으로 분석하라.
+""".strip()
+    return f"""
+[고급 분석 범위]
+- 분석 유형: {scope}
+- 분석할 문항번호: {item_text}
+""".strip()
+
+
+def build_advanced_exam_ai_prompt(
+    parsed: ParsedData,
+    analysis: Dict[str, Any],
+    pdf_name: str = "원안지 PDF",
+    scope: str = "원안지 기반 전체 시험 분석",
+    item_numbers: Optional[List[int]] = None,
+    student_key: Optional[str] = None,
+    anonymize_student: bool = True,
+) -> str:
     """고급 분석: 업로드한 원안지 PDF와 통계 결과를 연결해 심층 해석을 생성한다."""
+    item_numbers = item_numbers or []
     item = analysis["item"].copy().sort_values("정답률")
     domain = analysis["domain"].copy().sort_values("정답률")
     standard = analysis.get("standard", pd.DataFrame()).copy()
@@ -1003,22 +1087,62 @@ def build_advanced_exam_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], 
     if not difficulty_gap.empty:
         difficulty_gap = difficulty_gap[difficulty_gap["괴리여부"].isin(["불일치", "차이 있음"])].copy()
         difficulty_gap = difficulty_gap.sort_values(["정답률", "문항번호"], ascending=[True, True])
+
+    selected_item = pd.DataFrame()
+    if item_numbers:
+        selected_item = analysis["item"].copy()
+        selected_item["문항번호"] = pd.to_numeric(selected_item["문항번호"], errors="coerce").astype("Int64")
+        selected_item = selected_item[selected_item["문항번호"].isin(item_numbers)].sort_values("문항번호")
+
+    student_block = "학생 개별 분석 대상이 선택되지 않음"
+    student_label = None
+    if student_key:
+        students = analysis.get("students", pd.DataFrame()).copy()
+        long_df = analysis.get("long", pd.DataFrame()).copy()
+        one = students[students["반/번호"] == student_key]
+        if not one.empty:
+            srow = one.iloc[0]
+            student_label = f"{srow['반/번호']} 학생" if anonymize_student else f"{srow['반/번호']} {srow['이름']} 학생"
+            student_all = long_df[long_df["반/번호"] == student_key].copy().sort_values("문항번호")
+            if item_numbers:
+                student_all = student_all[pd.to_numeric(student_all["문항번호"], errors="coerce").isin(item_numbers)]
+            view_cols = ["문항번호", "평가영역", "성취기준", "난이도", "배점", "정답", "선택지", "정답여부", "점수"]
+            existing = [c for c in view_cols if c in student_all.columns]
+            student_block = f"""
+[학생 개별 요약]
+- 대상: {student_label}
+- 계산점수: {round(float(srow['계산점수']), 2)}점
+- 환산점수: {round(float(srow['환산점수']), 2)}점
+- 성취수준: {srow['성취수준']}
+
+[학생 문항별 풀이 결과]
+{student_all[existing].to_string(index=False) if not student_all.empty else '선택 학생의 문항별 풀이 결과 없음'}
+""".strip()
+
+    scope_instruction = _advanced_scope_instruction(scope, item_numbers, student_label)
     exam = parsed.exam_info
+    selected_item_text = ai_percent_df(selected_item).to_string(index=False) if not selected_item.empty else "지정 문항 상세 통계 없음"
+
     return f"""
 너는 중학교 과학 평가 문항을 분석하는 교육평가 전문가이다.
 
 아래에는 원안지 PDF 파일과 평가 통계 결과가 함께 제공된다.
 원안지의 문항 내용, 선택지 구성, 자료 제시 방식, 성취기준, 정답률, 선택지 반응률, 변별도, 성취수준별 정답률을 종합하여 시험 결과를 심층 분석하라.
 
+{scope_instruction}
+
 [원안지 파일]
 - 파일명: {pdf_name}
-- 이 PDF 전체를 확인하고, 아래 통계 자료에서 우선 확인해야 할 문항을 찾아 문항 내용과 연결하라.
+- 이 PDF 전체를 확인하고, 아래 통계 자료와 연결하라.
 
 [평가 정보]
 {exam}
 
 [성취도 요약]
 {ai_percent_df(analysis['achievement']).to_string(index=False)}
+
+[사용자 지정 문항 상세 통계]
+{selected_item_text}
 
 [정답률 낮은 문항]
 {ai_percent_df(item[['문항번호','평가영역','난이도','배점','정답','정답률','변별도']].head(12)).to_string(index=False)}
@@ -1035,41 +1159,32 @@ def build_advanced_exam_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], 
 [예상 난이도와 실제 정답률 판정]
 {difficulty_gap[['문항번호','평가영역','예상난이도','기대정답률구간','정답률_pct','차이해석']].head(15).to_string(index=False) if not difficulty_gap.empty else '불일치 문항 없음'}
 
-[우선 확인 문항 후보]
-- 정답률이 낮은 문항, 예상 난이도와 실제 결과가 어긋난 문항, 변별도가 낮은 문항, 특정 오답 선택지에 응답이 몰린 문항, 성취기준별 정답률이 낮은 문항을 우선 확인하라.
-- 원안지 PDF에서 해당 문항을 찾아 문항 내용, 자료, 선지 구성과 통계 결과를 연결하라.
-- 후보가 많으면 의미 있는 문항을 충분히 다루되, 실제로 심층 분석 필요성이 낮은 문항은 억지로 포함하지 말라.
+{student_block if scope == '원안지 기반 학생 개별 분석' else ''}
 
-다음 구조로 작성하라.
-1. 시험 전체 구성 분석
-- 원안지 전체를 바탕으로 문항들이 어떤 유형으로 구성되어 있는지 분석하라.
-- 단순 개념 확인, 개념 적용, 자료 해석, 그래프/표 해석, 계산, 추론, 실생활 적용 문항의 비중을 파악하라.
-- 시험 전체가 해당 단원의 핵심 개념과 성취기준을 균형 있게 평가하고 있는지 해석하라.
+다음 구조를 기본으로 하되, 선택한 분석 유형에 맞지 않는 항목은 간략히 처리하고 필요한 항목을 더 자세히 작성하라.
 
-2. 전체 결과와 문항 구성의 관계
-- 전체 평균, 표준편차, 성취수준 분포가 문항 구성과 어떤 관련이 있는지 해석하라.
-- 시험이 전반적으로 쉬웠는지, 어려웠는지, 변별 중심인지, 기본 개념 확인 중심인지 판단하라.
+1. 분석 대상 요약
+- 선택한 분석 유형, 지정 문항, 선택 학생이 있으면 먼저 정리하라.
 
-3. 주요 문항 심층 분석
-- 정답률이 낮은 문항, 예상보다 어려웠던 문항, 변별도가 낮은 문항, 특정 오답 선택지에 응답이 몰린 문항을 우선 분석하라.
-- 각 문항에 대해 핵심 개념, 요구 사고 과정, 오답 유인 가능성, 실제 정답률이 나타난 이유, 수업에서 보완할 지점을 포함하라.
+2. 원안지 기반 문항 내용 분석
+- 원안지에서 해당 문항을 찾아 핵심 개념, 자료 제시 방식, 선지 구성, 요구 사고 과정을 분석하라.
+- 지정 문항이 있으면 지정 문항을 우선적으로 다루라.
 
-4. 난이도 괴리 문항 분석
-- 교사 예상 난이도와 실제 정답률이 어긋난 문항을 원안지 내용과 연결해 분석하라.
+3. 통계 결과와 문항 내용의 연결
+- 정답률, 변별도, 선택지 반응률, 예상 난이도와 실제 결과를 문항 내용과 연결해 해석하라.
+- 특정 오답 선택지에 응답이 몰린 경우, 해당 선택지가 학생들에게 매력적으로 작용했을 가능성을 설명하라.
 
-5. 선택지 반응 분석
-- 특정 오답 선택지에 학생 응답이 몰린 문항을 분석하라.
-- 오개념, 계산 실수, 자료 해석 오류, 개념 혼동과 연결될 수 있는 가능성을 추론하라.
-
-6. 평가영역 및 성취기준 적합성 분석
-- 문항이 문항정보표의 평가영역 및 성취기준과 잘 연결되는지 검토하라.
+4. 평가영역·성취기준과의 연결
+- 문항 내용이 문항정보표의 평가영역 및 성취기준과 잘 연결되는지 검토하라.
 - 성취기준에 비해 문항이 지나치게 단순하거나 복합적인 경우를 설명하라.
 
-7. 성취수준별 학습 특성 분석
-- A~E 수준별 정답률 차이를 바탕으로 각 수준의 학생들이 어떤 유형의 문항에서 어려움을 보였는지 분석하라.
+5. 학생 개별 분석인 경우
+- 선택 학생의 전체 풀이 결과를 바탕으로 맞힌 문항과 틀린 문항의 특성을 비교하라.
+- 학생이 어려워한 문항의 공통점, 취약 성취기준, 보충 지도 방향을 원안지 내용과 연결해 제시하라.
+- 학생 이름은 직접 쓰지 말고 '해당 학생' 또는 '학생'으로 표현하라.
 
-8. 수업 개선 및 평가 개선 제안
-- 평가 결과를 바탕으로 다음 수업에서 보완할 개념, 활동, 피드백 방식을 제안하라.
+6. 수업 개선 및 평가 개선 제안
+- 다음 수업에서 보완할 개념, 활동, 피드백 방식을 제안하라.
 - 문항 개선이 필요한 경우 문항 표현, 자료 제시, 선지 구성 측면에서 개선 방향을 제시하라.
 
 작성 원칙:
@@ -2201,16 +2316,48 @@ def main() -> None:
         with ai_tab_advanced:
             with st.container(border=True):
                 st.markdown("#### 고급 분석: 원안지 기반 심층 해석")
-                st.markdown("원안지 PDF를 업로드한 뒤, 원안지 전체와 통계 결과를 함께 보내 문항 내용 기반 심층 분석을 생성합니다.")
+                st.markdown("원안지 PDF를 업로드한 뒤, 분석 유형과 문항 범위를 정해 문항 내용 기반 심층 분석을 생성합니다.")
                 source_pdf = st.file_uploader("원안지 PDF 업로드", type=["pdf"], key="source_exam_pdf")
                 advanced_scope = st.selectbox(
                     "고급 분석 범위",
                     ["원안지 기반 전체 시험 분석", "주요 문항 집중 분석", "오답 선택지 분석", "성취기준 적합성 분석", "원안지 기반 학생 개별 분석"],
                     key="advanced_ai_scope",
                 )
+
+                max_q = int(pd.to_numeric(parsed.question_df["문항번호"], errors="coerce").max()) if not parsed.question_df.empty else None
+                need_item_input = advanced_scope in ["주요 문항 집중 분석", "오답 선택지 분석", "원안지 기반 학생 개별 분석"]
+                item_number_raw = st.text_input(
+                    "분석할 문항번호",
+                    value="",
+                    placeholder="예: 3, 7, 12 또는 3-7",
+                    help="비워두면 통계 결과를 기준으로 AI가 우선 분석 문항을 선정합니다.",
+                    key="advanced_item_numbers",
+                )
+                selected_item_numbers = parse_question_number_input(item_number_raw, max_question=max_q)
+                if item_number_raw.strip() and not selected_item_numbers:
+                    st.warning("입력한 문항번호를 인식하지 못했습니다. 예: 3, 7, 12 또는 3-7 형식으로 입력하세요.")
+                elif selected_item_numbers:
+                    st.caption("선택 문항: " + ", ".join(f"{n}번" for n in selected_item_numbers))
+                elif need_item_input:
+                    st.caption("문항번호를 비워두면 앱의 통계 결과를 바탕으로 우선 분석 문항을 AI가 선정합니다.")
+
+                advanced_student_key = None
+                if advanced_scope == "원안지 기반 학생 개별 분석":
+                    st.markdown("##### 학생 선택")
+                    advanced_student_key = render_student_selector(analysis["individual"], "advanced_student_ai")
+                    if advanced_student_key:
+                        st.caption("선택 학생의 전체 문항 풀이 결과와 원안지를 함께 분석합니다.")
+
                 pdf_name = source_pdf.name if source_pdf is not None else "원안지 PDF 미업로드"
-                advanced_prompt = build_advanced_exam_ai_prompt(parsed, analysis, pdf_name=pdf_name)
-                advanced_prompt = advanced_prompt.replace("[원안지 파일]", f"[고급 분석 범위]\n- {advanced_scope}\n\n[원안지 파일]", 1)
+                advanced_prompt = build_advanced_exam_ai_prompt(
+                    parsed,
+                    analysis,
+                    pdf_name=pdf_name,
+                    scope=advanced_scope,
+                    item_numbers=selected_item_numbers,
+                    student_key=advanced_student_key,
+                    anonymize_student=True,
+                )
 
             with st.container(border=True):
                 with st.expander("AI에 전달될 고급 분석 프롬프트 확인", expanded=False):
@@ -2224,7 +2371,7 @@ def main() -> None:
                 if source_pdf is None:
                     st.info("원안지 PDF를 업로드하면 고급 분석을 실행할 수 있습니다.")
 
-                if st.button("고급 분석 실행", type="primary", key="run_advanced_ai", disabled=(source_pdf is None)):
+                if st.button("고급 분석 실행", type="primary", key="run_advanced_ai", disabled=(source_pdf is None or (advanced_scope == "원안지 기반 학생 개별 분석" and not advanced_student_key))):
                     if not api_key:
                         st.error("OpenAI API Key를 입력하세요.")
                     else:
