@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.7
+성취수준별 평가결과 분석 웹앱 v1.8
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -10,6 +10,7 @@
 - v1.5: 문항정보 수정표의 데이터 타입 충돌로 인한 st.data_editor 오류 수정
 - v1.6: 성취도 분석 탭에 학급별 최고·최저·평균 그래프와 선택 학급 성취수준 분포 그래프 추가
 - v1.7: matplotlib 의존성 제거, Streamlit 기본 차트로 성취도 분석 그래프 표시
+- v1.8: 성취도 분석 탭의 전체 분석 그래프를 최고점·최저점·평균 캔들형으로 변경하고, 전체/개별 반 그래프를 좌우 배치
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -39,7 +40,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.7"
+APP_VERSION = "v1.8"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1006,27 +1007,69 @@ def main() -> None:
         a4.metric("검사신뢰도 α", "-" if alpha is None else f"{alpha:.3f}")
         st.dataframe(fmt_percent_df(analysis["achievement"]), use_container_width=True)
 
-        st.markdown("#### 전체 분석 그래프")
-        class_score_chart_df = make_class_score_summary_chart_df(analysis["class_achievement"])
-        if not class_score_chart_df.empty:
-            st.line_chart(class_score_chart_df, use_container_width=True, height=360)
-        else:
-            st.info("표시할 학급별 점수 데이터가 없습니다.")
+        graph_col1, graph_col2 = st.columns(2)
 
-        st.markdown("#### 한 반 분석 그래프")
-        class_values = sorted(analysis["individual"]["반"].dropna().unique().tolist())
-        selected_class_for_graph = st.selectbox(
-            "분석할 반 선택",
-            class_values,
-            format_func=lambda x: f"{int(x)}반" if pd.notna(x) and float(x).is_integer() else f"{x}반",
-            key="achievement_class_graph_select",
-        )
-        class_level_chart_df = make_class_level_distribution_chart_df(analysis["individual"], selected_class_for_graph)
-        if not class_level_chart_df.empty:
-            st.bar_chart(class_level_chart_df[["학생수(명)"]], use_container_width=True, height=320)
-            st.dataframe(fmt_percent_df(class_level_chart_df.reset_index()), use_container_width=True, hide_index=True)
-        else:
-            st.info("선택한 반의 성취수준 데이터가 없습니다.")
+        with graph_col1:
+            st.markdown("#### 전체 분석 그래프")
+            class_score_chart_df = make_class_score_summary_chart_df(analysis["class_achievement"])
+            if not class_score_chart_df.empty:
+                chart_data = class_score_chart_df.reset_index()
+                st.vega_lite_chart(
+                    chart_data,
+                    {
+                        "height": 340,
+                        "layer": [
+                            {
+                                "mark": {"type": "rule", "strokeWidth": 3},
+                                "encoding": {
+                                    "x": {"field": "학급", "type": "ordinal", "sort": None, "axis": {"title": "학급"}},
+                                    "y": {"field": "최저점", "type": "quantitative", "axis": {"title": "점수"}},
+                                    "y2": {"field": "최고점"},
+                                    "tooltip": [
+                                        {"field": "학급", "type": "ordinal"},
+                                        {"field": "최고점", "type": "quantitative", "format": ".1f"},
+                                        {"field": "평균", "type": "quantitative", "format": ".1f"},
+                                        {"field": "최저점", "type": "quantitative", "format": ".1f"},
+                                    ],
+                                },
+                            },
+                            {
+                                "mark": {"type": "point", "filled": True, "size": 90},
+                                "encoding": {
+                                    "x": {"field": "학급", "type": "ordinal", "sort": None},
+                                    "y": {"field": "평균", "type": "quantitative"},
+                                    "tooltip": [
+                                        {"field": "학급", "type": "ordinal"},
+                                        {"field": "평균", "type": "quantitative", "format": ".1f"},
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                    use_container_width=True,
+                )
+            else:
+                st.info("표시할 학급별 점수 데이터가 없습니다.")
+
+        with graph_col2:
+            st.markdown("#### 한 반 분석 그래프")
+            class_values = sorted(analysis["individual"]["반"].dropna().unique().tolist())
+            if class_values:
+                selected_class_for_graph = st.selectbox(
+                    "분석할 반 선택",
+                    class_values,
+                    format_func=lambda x: f"{int(x)}반" if pd.notna(x) and float(x).is_integer() else f"{x}반",
+                    key="achievement_class_graph_select",
+                )
+                class_level_chart_df = make_class_level_distribution_chart_df(analysis["individual"], selected_class_for_graph)
+                if not class_level_chart_df.empty:
+                    chart_data = class_level_chart_df.reset_index()
+                    st.bar_chart(chart_data, x="성취수준", y="학생수(명)", use_container_width=True, height=340)
+                    st.dataframe(fmt_percent_df(chart_data), use_container_width=True, hide_index=True)
+                else:
+                    st.info("선택한 반의 성취수준 데이터가 없습니다.")
+            else:
+                st.info("표시할 학급 데이터가 없습니다.")
 
         st.markdown("#### 학급별 성취도")
         st.dataframe(fmt_percent_df(analysis["class_achievement"]), use_container_width=True)
