@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.23
+성취수준별 평가결과 분석 웹앱 v1.24
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -26,6 +26,7 @@
 - v1.21: 난이도 괴리 분석 그래프를 제거하고 일치/예상보다 어려웠음/예상보다 쉬웠음만 표시
 - v1.22: 난이도 괴리 분석의 예상 난이도를 편집값이 아니라 업로드한 문항정보표 원본 난이도 기준으로 고정
 - v1.23: 난이도 괴리 분석에서 체크박스를 제거하고 문항번호 순으로 전체 표시, 일치/불일치/예상보다 어려움/쉬움 개수 요약 추가
+- v1.24: 난이도 괴리 분석 기준 입력을 어려움/보통 난이도 구분 정답률, 보통/쉬움 난이도 구분 정답률로 분리
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -55,7 +56,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.23"
+APP_VERSION = "v1.24"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1534,14 +1535,31 @@ def main() -> None:
         st.dataframe(fmt_percent_df(analysis["item"].sort_values("정답률")), use_container_width=True, height=420)
 
         st.markdown("#### 예상 난이도-실제 정답률 일치 여부")
-        hard_cut, easy_cut = st.slider(
-            "기준 조절",
-            min_value=0,
-            max_value=100,
-            value=(33, 66),
-            step=1,
-        )
-        difficulty_gap_df = make_difficulty_gap_analysis(analysis["item"], hard_cut_percent=float(hard_cut), easy_cut_percent=float(easy_cut), expected_question_df=parsed.original_question_df)
+        기준_col1, 기준_col2 = st.columns(2)
+        with 기준_col1:
+            hard_cut = st.number_input(
+                "어려움/보통 난이도 구분 정답률(%)",
+                min_value=0,
+                max_value=100,
+                value=33,
+                step=1,
+            )
+        with 기준_col2:
+            easy_cut = st.number_input(
+                "보통/쉬움 난이도 구분 정답률(%)",
+                min_value=0,
+                max_value=100,
+                value=66,
+                step=1,
+            )
+
+        if int(hard_cut) >= int(easy_cut):
+            st.warning("보통/쉬움 난이도 구분 정답률은 어려움/보통 난이도 구분 정답률보다 커야 합니다. 현재는 기본값 33%, 66%로 계산합니다.")
+            calc_hard_cut, calc_easy_cut = 33.0, 66.0
+        else:
+            calc_hard_cut, calc_easy_cut = float(hard_cut), float(easy_cut)
+
+        difficulty_gap_df = make_difficulty_gap_analysis(analysis["item"], hard_cut_percent=calc_hard_cut, easy_cut_percent=calc_easy_cut, expected_question_df=parsed.original_question_df)
         analysis["difficulty_gap"] = difficulty_gap_df
 
         match_count = int((difficulty_gap_df["차이해석"] == "일치").sum()) if not difficulty_gap_df.empty else 0
