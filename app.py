@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.9
+성취수준별 평가결과 분석 웹앱 v1.10
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -12,6 +12,7 @@
 - v1.7: matplotlib 의존성 제거, Streamlit 기본 차트로 성취도 분석 그래프 표시
 - v1.8: 성취도 분석 탭의 전체 분석 그래프를 최고점·최저점·평균 캔들형으로 변경하고, 전체/개별 반 그래프를 좌우 배치
 - v1.9: 전체 분석 캔들형 그래프의 최고·최저 범위선과 평균점을 강조하고, “한 반 분석” 용어를 “개별 반 분석”으로 변경
+- v1.10: 전체 분석 그래프에 점수 구간별 도수 폭을 반영한 항아리형 분포를 추가하여 최고·최저·평균과 분포를 함께 표시
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -398,6 +399,53 @@ def make_class_score_summary_chart_df(class_achievement: pd.DataFrame) -> pd.Dat
     for col in ["최고점", "평균", "최저점"]:
         out[col] = pd.to_numeric(out[col], errors="coerce")
     return out.set_index("학급")
+
+
+def make_class_score_distribution_chart_data(individual_df: pd.DataFrame, class_achievement: pd.DataFrame, bin_size: int = 5) -> Tuple[pd.DataFrame, pd.DataFrame, str]:
+    """학급별 최고·최저·평균과 점수 구간별 도수를 함께 그리기 위한 Vega-Lite용 데이터 생성."""
+    if individual_df.empty or class_achievement.empty or "환산점수" not in individual_df.columns:
+        return pd.DataFrame(), pd.DataFrame(), ""
+
+    class_values = sorted(individual_df["반"].dropna().unique().tolist(), key=lambda x: float(x) if str(x).replace('.', '', 1).isdigit() else str(x))
+    class_pos_map = {str(c): i + 1 for i, c in enumerate(class_values)}
+    class_label_map = {i + 1: (f"{int(c)}반" if pd.notna(c) and float(c).is_integer() else f"{c}반") for i, c in enumerate(class_values)}
+
+    dist_rows = []
+    for c in class_values:
+        scores = pd.to_numeric(individual_df[individual_df["반"].astype(str) == str(c)]["환산점수"], errors="coerce").dropna()
+        if scores.empty:
+            continue
+        bins = np.arange(0, 100 + bin_size, bin_size)
+        counts, edges = np.histogram(scores.clip(lower=0, upper=100), bins=bins)
+        max_count = max(int(counts.max()), 1)
+        pos = class_pos_map[str(c)]
+        label = class_label_map[pos]
+        for count, low, high in zip(counts, edges[:-1], edges[1:]):
+            if count <= 0:
+                continue
+            half_width = 0.06 + (float(count) / max_count) * 0.34
+            dist_rows.append({
+                "학급위치": pos,
+                "학급": label,
+                "점수구간하한": float(low),
+                "점수구간상한": float(high),
+                "도수(명)": int(count),
+                "왼쪽폭": pos - half_width,
+                "오른쪽폭": pos + half_width,
+            })
+
+    summary = class_achievement.copy()
+    summary["학급위치"] = summary["반"].astype(str).map(class_pos_map)
+    summary = summary.dropna(subset=["학급위치"]).copy()
+    summary["학급위치"] = summary["학급위치"].astype(float)
+    summary["학급"] = summary["학급위치"].astype(int).map(class_label_map)
+    for col in ["최고점", "평균", "최저점"]:
+        summary[col] = pd.to_numeric(summary[col], errors="coerce")
+    summary = summary[["학급위치", "학급", "최고점", "평균", "최저점"]]
+
+    label_array = "[" + ",".join([repr(class_label_map[i]) for i in sorted(class_label_map)]) + "]"
+    label_expr = f"{label_array}[datum.value-1]"
+    return pd.DataFrame(dist_rows), summary, label_expr
 
 
 def make_class_level_distribution_chart_df(individual_df: pd.DataFrame, selected_class: Any) -> pd.DataFrame:
@@ -1012,41 +1060,72 @@ def main() -> None:
 
         with graph_col1:
             st.markdown("#### 전체 분석 그래프")
-            class_score_chart_df = make_class_score_summary_chart_df(analysis["class_achievement"])
-            if not class_score_chart_df.empty:
-                chart_data = class_score_chart_df.reset_index()
+            dist_chart_df, summary_chart_df, class_label_expr = make_class_score_distribution_chart_data(
+                analysis["individual"], analysis["class_achievement"], bin_size=5
+            )
+            if not summary_chart_df.empty:
                 st.vega_lite_chart(
-                    chart_data,
                     {
-                        "height": 360,
+                        "distribution": dist_chart_df.to_dict("records"),
+                        "summary": summary_chart_df.to_dict("records"),
+                    },
+                    {
+                        "height": 390,
+                        "resolve": {"scale": {"x": "shared", "y": "shared"}},
                         "config": {
                             "axis": {"labelFontSize": 12, "titleFontSize": 13, "grid": True},
                             "view": {"stroke": "transparent"},
                         },
                         "layer": [
                             {
+                                "data": {"name": "distribution"},
                                 "mark": {
-                                    "type": "rule",
-                                    "strokeWidth": 7,
-                                    "color": "#2F3A4A",
-                                    "opacity": 0.95,
+                                    "type": "rect",
+                                    "cornerRadius": 2,
+                                    "color": "#94A3B8",
+                                    "opacity": 0.75,
                                 },
                                 "encoding": {
                                     "x": {
-                                        "field": "학급",
-                                        "type": "ordinal",
-                                        "sort": None,
-                                        "axis": {"title": "학급", "labelAngle": 0},
+                                        "field": "왼쪽폭",
+                                        "type": "quantitative",
+                                        "axis": {
+                                            "title": "학급",
+                                            "labelAngle": 0,
+                                            "values": summary_chart_df["학급위치"].astype(int).tolist(),
+                                            "labelExpr": class_label_expr,
+                                        },
                                     },
+                                    "x2": {"field": "오른쪽폭"},
                                     "y": {
-                                        "field": "최저점",
+                                        "field": "점수구간하한",
                                         "type": "quantitative",
                                         "axis": {"title": "점수"},
-                                        "scale": {"zero": False},
+                                        "scale": {"domain": [0, 100]},
                                     },
+                                    "y2": {"field": "점수구간상한"},
+                                    "tooltip": [
+                                        {"field": "학급", "type": "nominal", "title": "학급"},
+                                        {"field": "점수구간하한", "type": "quantitative", "format": ".0f", "title": "구간 시작"},
+                                        {"field": "점수구간상한", "type": "quantitative", "format": ".0f", "title": "구간 끝"},
+                                        {"field": "도수(명)", "type": "quantitative", "title": "도수(명)"},
+                                    ],
+                                },
+                            },
+                            {
+                                "data": {"name": "summary"},
+                                "mark": {
+                                    "type": "rule",
+                                    "strokeWidth": 5,
+                                    "color": "#111827",
+                                    "opacity": 0.95,
+                                },
+                                "encoding": {
+                                    "x": {"field": "학급위치", "type": "quantitative"},
+                                    "y": {"field": "최저점", "type": "quantitative"},
                                     "y2": {"field": "최고점"},
                                     "tooltip": [
-                                        {"field": "학급", "type": "ordinal", "title": "학급"},
+                                        {"field": "학급", "type": "nominal", "title": "학급"},
                                         {"field": "최고점", "type": "quantitative", "format": ".1f", "title": "최고점"},
                                         {"field": "평균", "type": "quantitative", "format": ".1f", "title": "평균"},
                                         {"field": "최저점", "type": "quantitative", "format": ".1f", "title": "최저점"},
@@ -1054,51 +1133,37 @@ def main() -> None:
                                 },
                             },
                             {
-                                "mark": {
-                                    "type": "tick",
-                                    "thickness": 4,
-                                    "size": 26,
-                                    "color": "#111827",
-                                },
+                                "data": {"name": "summary"},
+                                "mark": {"type": "tick", "thickness": 4, "size": 32, "color": "#111827"},
                                 "encoding": {
-                                    "x": {"field": "학급", "type": "ordinal", "sort": None},
+                                    "x": {"field": "학급위치", "type": "quantitative"},
                                     "y": {"field": "최고점", "type": "quantitative"},
-                                    "tooltip": [
-                                        {"field": "학급", "type": "ordinal", "title": "학급"},
-                                        {"field": "최고점", "type": "quantitative", "format": ".1f", "title": "최고점"},
-                                    ],
                                 },
                             },
                             {
-                                "mark": {
-                                    "type": "tick",
-                                    "thickness": 4,
-                                    "size": 26,
-                                    "color": "#111827",
-                                },
+                                "data": {"name": "summary"},
+                                "mark": {"type": "tick", "thickness": 4, "size": 32, "color": "#111827"},
                                 "encoding": {
-                                    "x": {"field": "학급", "type": "ordinal", "sort": None},
+                                    "x": {"field": "학급위치", "type": "quantitative"},
                                     "y": {"field": "최저점", "type": "quantitative"},
-                                    "tooltip": [
-                                        {"field": "학급", "type": "ordinal", "title": "학급"},
-                                        {"field": "최저점", "type": "quantitative", "format": ".1f", "title": "최저점"},
-                                    ],
                                 },
                             },
                             {
+                                "data": {"name": "summary"},
                                 "mark": {
                                     "type": "point",
                                     "filled": True,
-                                    "size": 210,
+                                    "shape": "diamond",
+                                    "size": 240,
                                     "color": "#E11D48",
                                     "stroke": "white",
                                     "strokeWidth": 2.5,
                                 },
                                 "encoding": {
-                                    "x": {"field": "학급", "type": "ordinal", "sort": None},
+                                    "x": {"field": "학급위치", "type": "quantitative"},
                                     "y": {"field": "평균", "type": "quantitative"},
                                     "tooltip": [
-                                        {"field": "학급", "type": "ordinal", "title": "학급"},
+                                        {"field": "학급", "type": "nominal", "title": "학급"},
                                         {"field": "평균", "type": "quantitative", "format": ".1f", "title": "평균"},
                                     ],
                                 },
