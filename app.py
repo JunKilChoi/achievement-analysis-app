@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.13
+성취수준별 평가결과 분석 웹앱 v1.14
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -16,6 +16,7 @@
 - v1.11: 전체 분석 그래프의 Vega-Lite 데이터 연결 방식을 수정하여 항아리형 분포와 평균점이 실제로 표시되도록 보정
 - v1.12: 학생답 정오표 다중 업로드를 파일별 독립 처리로 안정화하고, 성공/중복/실패 파일을 개별 표시
 - v1.13: 정답을 .으로 표시하는 정오표와 정답 번호로 표시하는 정오표를 모두 지원하고, A~Z 복수답안코드 규약 반영
+- v1.14: 성취수준 산출 기준을 환산점수에서 시험지 원점수 기준으로 변경하고, 정오표/정답 표시의 1.0 같은 정수형 소수 표시를 1로 정규화
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -45,7 +46,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.13"
+APP_VERSION = "v1.14"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -108,6 +109,16 @@ def normalize_answer_value(v: Any) -> str:
     if n is not None and abs(n - int(n)) < 1e-9:
         return str(int(n))
     return text
+
+
+def normalize_mark_value(v: Any) -> str:
+    """정오표 표시용 정규화. 1.0처럼 들어온 정수형 소수는 1로 표시한다."""
+    text = clean_text(v).upper()
+    if text in ["", ".", "-"]:
+        return text
+    if text in MULTI_CODE_MAP:
+        return text
+    return normalize_answer_value(text)
 
 
 def get_selected_display(raw: Any) -> Tuple[str, str]:
@@ -298,7 +309,7 @@ def parse_answer_sheet(uploaded_file: Any) -> Tuple[Dict[str, Any], pd.DataFrame
     for col_idx, qno in q_cols:
         ans_records.append({
             "문항번호": qno,
-            "정오표_정답": to_int_if_possible(answer_row[col_idx] if col_idx < len(answer_row) else None),
+            "정오표_정답": normalize_mark_value(answer_row[col_idx] if col_idx < len(answer_row) else None),
             "정오표_배점": to_number(point_row[col_idx] if col_idx < len(point_row) else None),
         })
     answer_key_df = pd.DataFrame(ans_records)
@@ -325,7 +336,7 @@ def parse_answer_sheet(uploaded_file: Any) -> Tuple[Dict[str, Any], pd.DataFrame
         rec["반"] = int(m.group(1)) if m else None
         rec["번호"] = int(m.group(2)) if m else None
         for col_idx, qno in q_cols:
-            rec[f"문항{qno:02d}"] = clean_text(row[col_idx] if col_idx < len(row) else "")
+            rec[f"문항{qno:02d}"] = normalize_mark_value(row[col_idx] if col_idx < len(row) else "")
         for name, col_idx in extra_cols.items():
             rec[name] = to_number(row[col_idx] if col_idx < len(row) else None)
         students.append(rec)
@@ -376,7 +387,7 @@ def build_long_data(qdf: pd.DataFrame, sdf: pd.DataFrame) -> pd.DataFrame:
     for _, s in sdf.iterrows():
         for qno, q in qmap.items():
             raw = clean_text(s.get(f"문항{int(qno):02d}", ""))
-            correct_answer = q.get("정답")
+            correct_answer = normalize_mark_value(q.get("정답"))
             point = float(q.get("배점") or 0)
             selected, mark_type = get_selected_display(raw)
             is_correct = is_correct_mark(raw, correct_answer)
@@ -397,7 +408,7 @@ def build_long_data(qdf: pd.DataFrame, sdf: pd.DataFrame) -> pd.DataFrame:
                 "반/번호": s.get("반/번호"), "반": s.get("반"), "번호": s.get("번호"),
                 "학번": s.get("학번"), "이름": s.get("이름"), "문항번호": int(qno),
                 "평가영역": q.get("평가영역"), "성취기준": q.get("성취기준"), "난이도": q.get("난이도"),
-                "배점": point, "정답": correct_answer, "원본표시": raw, "선택지": selected,
+                "배점": point, "정답": normalize_mark_value(correct_answer), "원본표시": normalize_mark_value(raw), "선택지": normalize_mark_value(selected),
                 "정오": status, "정답여부": is_correct, "점수": score,
             })
     return pd.DataFrame(rows)
@@ -411,7 +422,9 @@ def add_student_scores(sdf: pd.DataFrame, long_df: pd.DataFrame, total_full_scor
         out["원본총점"] = out["영역총점"]
         out["점수차이"] = out["계산점수"] - out["원본총점"].fillna(0)
     out["환산점수"] = out["계산점수"] / total_full_score * 100 if total_full_score else out["계산점수"]
-    out["성취수준"] = out["환산점수"].apply(lambda x: classify_level(float(x), cuts["A"], cuts["B"], cuts["C"], cuts["D"]))
+    # 성취수준은 환산점수가 아니라 시험지 자체의 원점수 기준으로 산출한다.
+    out["성취수준기준점수"] = out["계산점수"]
+    out["성취수준"] = out["성취수준기준점수"].apply(lambda x: classify_level(float(x), cuts["A"], cuts["B"], cuts["C"], cuts["D"]))
     return out
 
 
@@ -442,10 +455,10 @@ def make_class_score_summary_chart_df(class_achievement: pd.DataFrame) -> pd.Dat
     return out.set_index("학급")
 
 
-def make_class_score_distribution_chart_data(individual_df: pd.DataFrame, class_achievement: pd.DataFrame, bin_size: int = 5) -> Tuple[pd.DataFrame, pd.DataFrame, str]:
+def make_class_score_distribution_chart_data(individual_df: pd.DataFrame, class_achievement: pd.DataFrame, full_score: float = 100.0, bin_size: int = 5) -> Tuple[pd.DataFrame, pd.DataFrame, str, float]:
     """학급별 최고·최저·평균과 점수 구간별 도수를 함께 그리기 위한 Vega-Lite용 데이터 생성."""
-    if individual_df.empty or class_achievement.empty or "환산점수" not in individual_df.columns:
-        return pd.DataFrame(), pd.DataFrame(), ""
+    if individual_df.empty or class_achievement.empty or "계산점수" not in individual_df.columns:
+        return pd.DataFrame(), pd.DataFrame(), "", 100.0
 
     class_values = sorted(individual_df["반"].dropna().unique().tolist(), key=lambda x: float(x) if str(x).replace('.', '', 1).isdigit() else str(x))
     class_pos_map = {str(c): i + 1 for i, c in enumerate(class_values)}
@@ -453,11 +466,13 @@ def make_class_score_distribution_chart_data(individual_df: pd.DataFrame, class_
 
     dist_rows = []
     for c in class_values:
-        scores = pd.to_numeric(individual_df[individual_df["반"].astype(str) == str(c)]["환산점수"], errors="coerce").dropna()
+        scores = pd.to_numeric(individual_df[individual_df["반"].astype(str) == str(c)]["계산점수"], errors="coerce").dropna()
         if scores.empty:
             continue
-        bins = np.arange(0, 100 + bin_size, bin_size)
-        counts, edges = np.histogram(scores.clip(lower=0, upper=100), bins=bins)
+        y_max = float(full_score or max(scores.max(), 100))
+        y_max = max(y_max, float(scores.max()), bin_size)
+        bins = np.arange(0, y_max + bin_size, bin_size)
+        counts, edges = np.histogram(scores.clip(lower=0, upper=y_max), bins=bins)
         max_count = max(int(counts.max()), 1)
         pos = class_pos_map[str(c)]
         label = class_label_map[pos]
@@ -486,7 +501,10 @@ def make_class_score_distribution_chart_data(individual_df: pd.DataFrame, class_
 
     label_array = "[" + ",".join([repr(class_label_map[i]) for i in sorted(class_label_map)]) + "]"
     label_expr = f"{label_array}[datum.value-1]"
-    return pd.DataFrame(dist_rows), summary, label_expr
+    y_max = float(full_score or 100.0)
+    if not summary.empty:
+        y_max = max(y_max, float(pd.to_numeric(summary["최고점"], errors="coerce").max() or y_max))
+    return pd.DataFrame(dist_rows), summary, label_expr, y_max
 
 
 def make_class_level_distribution_chart_df(individual_df: pd.DataFrame, selected_class: Any) -> pd.DataFrame:
@@ -505,7 +523,7 @@ def make_class_level_distribution_chart_df(individual_df: pd.DataFrame, selected
 
 
 def item_discrimination(long_df: pd.DataFrame, student_scores: pd.DataFrame) -> pd.DataFrame:
-    scores = student_scores[["반/번호", "환산점수"]].dropna().sort_values("환산점수", ascending=False)
+    scores = student_scores[["반/번호", "계산점수"]].dropna().sort_values("계산점수", ascending=False)
     n = len(scores)
     if n < 4:
         return pd.DataFrame({"문항번호": sorted(long_df["문항번호"].unique()), "변별도": np.nan})
@@ -523,23 +541,23 @@ def item_discrimination(long_df: pd.DataFrame, student_scores: pd.DataFrame) -> 
 def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, float]) -> Dict[str, pd.DataFrame | float | None]:
     qdf, sdf0, long_df0 = parsed.question_df.copy(), parsed.students_df.copy(), parsed.long_df.copy()
     students = add_student_scores(sdf0, long_df0, total_full_score, cuts)
-    long_df = long_df0.merge(students[["반/번호", "환산점수", "성취수준"]], on="반/번호", how="left")
+    long_df = long_df0.merge(students[["반/번호", "계산점수", "환산점수", "성취수준"]], on="반/번호", how="left")
 
     # 성취도 분석
     level_counts = students["성취수준"].value_counts().reindex(list("ABCDE"), fill_value=0)
     achievement = pd.DataFrame({
         "구분": ["전체"],
         "응시자수": [len(students)],
-        "평균": [students["환산점수"].mean()],
-        "표준편차": [students["환산점수"].std(ddof=1)],
-        "최고점": [students["환산점수"].max()],
-        "최저점": [students["환산점수"].min()],
+        "평균": [students["계산점수"].mean()],
+        "표준편차": [students["계산점수"].std(ddof=1)],
+        "최고점": [students["계산점수"].max()],
+        "최저점": [students["계산점수"].min()],
         "A인원": [level_counts["A"]], "B인원": [level_counts["B"]], "C인원": [level_counts["C"]],
         "D인원": [level_counts["D"]], "E인원": [level_counts["E"]],
     })
     class_achievement = students.groupby("반", dropna=False).agg(
-        응시자수=("반/번호", "count"), 평균=("환산점수", "mean"), 표준편차=("환산점수", "std"),
-        최고점=("환산점수", "max"), 최저점=("환산점수", "min")
+        응시자수=("반/번호", "count"), 평균=("계산점수", "mean"), 표준편차=("계산점수", "std"),
+        최고점=("계산점수", "max"), 최저점=("계산점수", "min")
     ).reset_index()
     for level in list("ABCDE"):
         cnt = students[students["성취수준"] == level].groupby("반")["반/번호"].count()
@@ -594,7 +612,7 @@ def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, flo
     level_item_pivot["수준간격차"] = level_item_pivot[["A", "B", "C", "D", "E"]].max(axis=1) - level_item_pivot[["A", "B", "C", "D", "E"]].min(axis=1)
 
     # 학생 개별 분석용 요약
-    individual = students[["반/번호", "반", "번호", "이름", "계산점수", "환산점수", "성취수준"]].copy()
+    individual = students[["반/번호", "반", "번호", "이름", "계산점수", "환산점수", "성취수준기준점수", "성취수준"]].copy()
     weak_items = long_df[~long_df["정답여부"]].groupby("반/번호")["문항번호"].apply(lambda s: ", ".join(map(str, sorted(s.tolist())))).reset_index(name="오답문항")
     individual = individual.merge(weak_items, on="반/번호", how="left")
     individual["오답문항"] = individual["오답문항"].fillna("")
@@ -1085,7 +1103,7 @@ def main() -> None:
     parsed.question_df = edited_question_df.copy()
     parsed.question_df["문항번호"] = pd.to_numeric(parsed.question_df["문항번호"], errors="coerce").fillna(0).astype(int)
     parsed.question_df["배점"] = pd.to_numeric(parsed.question_df["배점"], errors="coerce").fillna(0.0)
-    parsed.question_df["정답"] = parsed.question_df["정답"].astype(str).str.strip().apply(to_int_if_possible)
+    parsed.question_df["정답"] = parsed.question_df["정답"].apply(normalize_mark_value).apply(to_int_if_possible)
     parsed.long_df = build_long_data(parsed.question_df, parsed.students_df)
     parsed.validation_df = make_validation(parsed.question_df, parsed.answer_key_df)
 
@@ -1098,15 +1116,15 @@ def main() -> None:
 
     st.subheader("3. 분석 기준")
     c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
-    cut_a = c1.number_input("A/B 분할점수", value=90.0, step=1.0)
-    cut_b = c2.number_input("B/C 분할점수", value=80.0, step=1.0)
-    cut_c = c3.number_input("C/D 분할점수", value=70.0, step=1.0)
-    cut_d = c4.number_input("D/E 분할점수", value=60.0, step=1.0)
     parsed.exam_info["선택형만점"] = c5.number_input("선택형 만점", value=float(parsed.exam_info.get("선택형만점", parsed.question_df["배점"].fillna(0).sum() or 100.0)), step=1.0)
     parsed.exam_info["서답형만점"] = c6.number_input("서답형 만점", value=float(parsed.exam_info.get("서답형만점", 0.0) or 0.0), step=1.0)
     default_total = float(parsed.exam_info.get("과목만점", parsed.exam_info["선택형만점"] + parsed.exam_info["서답형만점"]) or 100.0)
     total_full_score = c7.number_input("과목 만점", value=default_total, step=1.0)
     parsed.exam_info["과목만점"] = total_full_score
+    cut_a = c1.number_input("A/B 분할점수", value=round(total_full_score * 0.9, 1), step=1.0, key="cut_a_raw")
+    cut_b = c2.number_input("B/C 분할점수", value=round(total_full_score * 0.8, 1), step=1.0, key="cut_b_raw")
+    cut_c = c3.number_input("C/D 분할점수", value=round(total_full_score * 0.7, 1), step=1.0, key="cut_c_raw")
+    cut_d = c4.number_input("D/E 분할점수", value=round(total_full_score * 0.6, 1), step=1.0, key="cut_d_raw")
     cuts = {"A": cut_a, "B": cut_b, "C": cut_c, "D": cut_d}
 
     analysis = analyze_all(parsed, total_full_score, cuts)
@@ -1142,8 +1160,8 @@ def main() -> None:
 
         with graph_col1:
             st.markdown("#### 전체 분석 그래프")
-            dist_chart_df, summary_chart_df, class_label_expr = make_class_score_distribution_chart_data(
-                analysis["individual"], analysis["class_achievement"], bin_size=5
+            dist_chart_df, summary_chart_df, class_label_expr, chart_y_max = make_class_score_distribution_chart_data(
+                analysis["individual"], analysis["class_achievement"], full_score=total_full_score, bin_size=5
             )
             if not summary_chart_df.empty:
                 dist_for_chart = dist_chart_df.copy()
@@ -1187,7 +1205,7 @@ def main() -> None:
                                         "field": "점수구간하한",
                                         "type": "quantitative",
                                         "axis": {"title": "점수"},
-                                        "scale": {"domain": [0, 100]},
+                                        "scale": {"domain": [0, chart_y_max]},
                                     },
                                     "y2": {"field": "점수구간상한"},
                                     "tooltip": [
