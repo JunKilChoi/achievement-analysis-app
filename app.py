@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.40
+성취수준별 평가결과 분석 웹앱 v1.41
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -43,6 +43,7 @@
 - v1.39: 고급 분석에서 업로드한 원안지 PDF를 OpenAI 파일 입력으로 연결하고, 원안지+통계 기반 심층 분석을 스트리밍 출력/Word 저장하도록 추가
 
 - v1.40: 고급 분석에서 분석 유형별 문항번호 입력 기능을 추가하고, 원안지 기반 학생 개별 문항 분석에서 반·학생 선택 후 해당 학생의 전체 풀이 결과와 원안지를 함께 분석하도록 개선
+- v1.41: AI 분석 결과를 현재 분석 조건별로 관리하여, 다운로드 시 초기화되지 않으면서 분석 유형·학생·문항 변경 시 이전 결과가 함께 저장되거나 화면에 남지 않도록 정리
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -2270,7 +2271,16 @@ def main() -> None:
                 docx_state_key = "basic_ai_docx_bytes"
                 filename_state_key = "basic_ai_docx_filename"
                 meta_state_key = "basic_ai_result_meta"
+                context_state_key = "basic_ai_result_context"
+                basic_context = hashlib.sha1(f"{basic_mode}|{basic_prompt}".encode("utf-8")).hexdigest()
 
+                # 분석 유형·학생·프롬프트가 바뀌면 이전 결과를 현재 화면에서 제거한다.
+                # 다운로드 버튼 클릭으로 인한 재실행에서는 context가 같으므로 결과가 유지된다.
+                if st.session_state.get(context_state_key) and st.session_state.get(context_state_key) != basic_context:
+                    for _key in [result_state_key, docx_state_key, filename_state_key, meta_state_key, context_state_key]:
+                        st.session_state.pop(_key, None)
+
+                basic_just_ran = False
                 if st.button("기본 분석 실행", type="primary", key="run_basic_ai"):
                     if not api_key:
                         st.error("OpenAI API Key를 입력하세요.")
@@ -2281,6 +2291,8 @@ def main() -> None:
                             st.session_state.pop(docx_state_key, None)
                             st.session_state.pop(filename_state_key, None)
                             st.session_state.pop(meta_state_key, None)
+                            st.session_state.pop(context_state_key, None)
+                            basic_just_ran = True
 
                             st.markdown("#### 기본 분석 결과")
                             st.caption("분석 결과가 생성되는 대로 아래에 실시간으로 표시됩니다.")
@@ -2298,10 +2310,19 @@ def main() -> None:
                             st.session_state[docx_state_key] = docx_bytes
                             st.session_state[filename_state_key] = basic_download_name
                             st.session_state[meta_state_key] = report_type
+                            st.session_state[context_state_key] = basic_context
+                            st.download_button(
+                                "기본 분석 결과 Word 다운로드",
+                                docx_bytes,
+                                basic_download_name,
+                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True,
+                                key="download_basic_ai_docx_fresh",
+                            )
                         except Exception as e:
                             st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
 
-                if st.session_state.get(result_state_key):
+                if st.session_state.get(result_state_key) and not basic_just_ran:
                     st.markdown("#### 저장된 기본 분석 결과")
                     st.markdown(st.session_state[result_state_key])
                     st.download_button(
@@ -2367,7 +2388,16 @@ def main() -> None:
                 adv_docx_state_key = "advanced_ai_docx_bytes"
                 adv_filename_state_key = "advanced_ai_docx_filename"
                 adv_meta_state_key = "advanced_ai_result_meta"
+                adv_context_state_key = "advanced_ai_result_context"
+                pdf_context_name = source_pdf.name if source_pdf is not None else ""
+                advanced_context = hashlib.sha1(f"{advanced_scope}|{item_number_raw}|{advanced_student_key}|{pdf_context_name}|{advanced_prompt}".encode("utf-8")).hexdigest()
 
+                # 분석 범위·문항번호·학생·PDF가 바뀌면 이전 고급 분석 결과를 현재 화면에서 제거한다.
+                if st.session_state.get(adv_context_state_key) and st.session_state.get(adv_context_state_key) != advanced_context:
+                    for _key in [adv_result_state_key, adv_docx_state_key, adv_filename_state_key, adv_meta_state_key, adv_context_state_key]:
+                        st.session_state.pop(_key, None)
+
+                advanced_just_ran = False
                 if source_pdf is None:
                     st.info("원안지 PDF를 업로드하면 고급 분석을 실행할 수 있습니다.")
 
@@ -2380,6 +2410,8 @@ def main() -> None:
                             st.session_state.pop(adv_docx_state_key, None)
                             st.session_state.pop(adv_filename_state_key, None)
                             st.session_state.pop(adv_meta_state_key, None)
+                            st.session_state.pop(adv_context_state_key, None)
+                            advanced_just_ran = True
 
                             pdf_bytes = source_pdf.getvalue()
                             st.markdown("#### 고급 분석 결과")
@@ -2398,10 +2430,19 @@ def main() -> None:
                             st.session_state[adv_docx_state_key] = docx_bytes
                             st.session_state[adv_filename_state_key] = "AI_고급분석_원안지기반심층해석.docx"
                             st.session_state[adv_meta_state_key] = report_type
+                            st.session_state[adv_context_state_key] = advanced_context
+                            st.download_button(
+                                "고급 분석 결과 Word 다운로드",
+                                docx_bytes,
+                                "AI_고급분석_원안지기반심층해석.docx",
+                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True,
+                                key="download_advanced_ai_docx_fresh",
+                            )
                         except Exception as e:
                             st.error(f"고급 분석 중 오류가 발생했습니다: {e}")
 
-                if st.session_state.get(adv_result_state_key):
+                if st.session_state.get(adv_result_state_key) and not advanced_just_ran:
                     st.markdown("#### 저장된 고급 분석 결과")
                     st.markdown(st.session_state[adv_result_state_key])
                     st.download_button(
