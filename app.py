@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.4
+성취수준별 평가결과 분석 웹앱 v1.5
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
 - v1.2: 화면·AI 프롬프트·엑셀 출력의 정답률/비율/변별도/수준간격차를 % 기준으로 표시
 - v1.3: 표 화면/엑셀 출력에서 비율값은 52.3%처럼 데이터에 %를 포함하고, 헤더에 (명)/(점)/(%) 단위 표시
 - v1.4: 업로드 후 문항정보표를 웹앱에서 직접 수정하고, 수정값을 분석/엑셀/AI에 반영
+- v1.5: 문항정보 수정표의 데이터 타입 충돌로 인한 st.data_editor 오류 수정
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -36,7 +37,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.4"
+APP_VERSION = "v1.5"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -889,10 +890,18 @@ def main() -> None:
     st.caption("나이스 문항정보표에서 자동 인식한 값입니다. 평가 후 분석 자료를 더 구체화하려면 평가영역, 성취기준, 난이도 등을 여기서 수정하세요. 수정한 값은 아래 분석 결과, 확인용 엑셀, 5종 분석 엑셀, AI 분석에 모두 반영됩니다.")
 
     editable_question_df = parsed.question_df.copy()
+
+    # Streamlit Cloud의 st.data_editor는 column_config와 실제 dtype이 맞지 않으면
+    # StreamlitAPIException을 발생시킵니다.
+    # 나이스 원본에서 평가영역/정답 등이 숫자처럼 읽히는 경우가 있어,
+    # 편집용 표에서는 텍스트 열을 명시적으로 문자열 dtype으로 통일합니다.
     if "문항번호" in editable_question_df.columns:
-        editable_question_df["문항번호"] = pd.to_numeric(editable_question_df["문항번호"], errors="coerce").astype("Int64")
+        editable_question_df["문항번호"] = pd.to_numeric(editable_question_df["문항번호"], errors="coerce").fillna(0).astype(int)
     if "배점" in editable_question_df.columns:
-        editable_question_df["배점"] = pd.to_numeric(editable_question_df["배점"], errors="coerce")
+        editable_question_df["배점"] = pd.to_numeric(editable_question_df["배점"], errors="coerce").fillna(0.0).astype(float)
+    for text_col in ["평가영역", "성취기준", "난이도", "정답"]:
+        if text_col in editable_question_df.columns:
+            editable_question_df[text_col] = editable_question_df[text_col].fillna("").astype(str)
 
     edited_question_df = st.data_editor(
         editable_question_df,
@@ -902,7 +911,7 @@ def main() -> None:
         key="question_info_editor",
         disabled=["문항번호"],
         column_config={
-            "문항번호": st.column_config.NumberColumn("문항번호", step=1),
+            "문항번호": st.column_config.NumberColumn("문항번호", step=1, disabled=True),
             "평가영역": st.column_config.TextColumn("평가영역", help="분석에 사용할 평가영역/평가요소명을 구체적으로 수정할 수 있습니다."),
             "성취기준": st.column_config.TextColumn("성취기준", width="large", help="AI 해석과 평가영역별 분석에 반영됩니다."),
             "난이도": st.column_config.SelectboxColumn("난이도", options=["", "어려움", "보통", "쉬움"]),
@@ -913,9 +922,9 @@ def main() -> None:
 
     # 편집값 정규화 후 전체 분석 데이터에 재반영
     parsed.question_df = edited_question_df.copy()
-    parsed.question_df["문항번호"] = pd.to_numeric(parsed.question_df["문항번호"], errors="coerce").astype(int)
+    parsed.question_df["문항번호"] = pd.to_numeric(parsed.question_df["문항번호"], errors="coerce").fillna(0).astype(int)
     parsed.question_df["배점"] = pd.to_numeric(parsed.question_df["배점"], errors="coerce").fillna(0.0)
-    parsed.question_df["정답"] = parsed.question_df["정답"].apply(to_int_if_possible)
+    parsed.question_df["정답"] = parsed.question_df["정답"].astype(str).str.strip().apply(to_int_if_possible)
     parsed.long_df = build_long_data(parsed.question_df, parsed.students_df)
     parsed.validation_df = make_validation(parsed.question_df, parsed.answer_key_df)
 
