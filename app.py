@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.37
+성취수준별 평가결과 분석 웹앱 v1.38
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -70,7 +70,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.37"
+APP_VERSION = "v1.38"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2099,11 +2099,22 @@ def main() -> None:
             with st.container(border=True):
                 with st.expander("AI에 전달될 기본 분석 프롬프트 확인", expanded=False):
                     st.text_area("기본 분석 프롬프트", basic_prompt, height=420)
+                result_state_key = "basic_ai_result_text"
+                docx_state_key = "basic_ai_docx_bytes"
+                filename_state_key = "basic_ai_docx_filename"
+                meta_state_key = "basic_ai_result_meta"
+
                 if st.button("기본 분석 실행", type="primary", key="run_basic_ai"):
                     if not api_key:
                         st.error("OpenAI API Key를 입력하세요.")
                     else:
                         try:
+                            # 새 분석을 시작할 때만 기존 결과를 지우고, 다운로드 버튼 클릭으로 인한 rerun에서는 유지한다.
+                            st.session_state.pop(result_state_key, None)
+                            st.session_state.pop(docx_state_key, None)
+                            st.session_state.pop(filename_state_key, None)
+                            st.session_state.pop(meta_state_key, None)
+
                             st.markdown("#### 기본 분석 결과")
                             st.caption("분석 결과가 생성되는 대로 아래에 실시간으로 표시됩니다.")
                             result_placeholder = st.empty()
@@ -2115,15 +2126,25 @@ def main() -> None:
                             report_title = "성취수준별 평가결과 AI 분석 보고서"
                             report_type = f"기본 분석: {basic_mode}"
                             docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type)
-                            st.download_button(
-                                "기본 분석 결과 Word 다운로드",
-                                docx_bytes,
-                                basic_download_name,
-                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                use_container_width=True,
-                            )
+
+                            st.session_state[result_state_key] = result
+                            st.session_state[docx_state_key] = docx_bytes
+                            st.session_state[filename_state_key] = basic_download_name
+                            st.session_state[meta_state_key] = report_type
                         except Exception as e:
                             st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
+
+                if st.session_state.get(result_state_key):
+                    st.markdown("#### 저장된 기본 분석 결과")
+                    st.markdown(st.session_state[result_state_key])
+                    st.download_button(
+                        "기본 분석 결과 Word 다운로드",
+                        st.session_state[docx_state_key],
+                        st.session_state.get(filename_state_key, basic_download_name),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                        key="download_basic_ai_docx_persisted",
+                    )
 
         with ai_tab_advanced:
             with st.container(border=True):
