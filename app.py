@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.16
+성취수준별 평가결과 분석 웹앱 v1.17
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -19,6 +19,7 @@
 - v1.14: 성취수준 산출 기준을 환산점수에서 시험지 원점수 기준으로 변경하고, 정오표/정답 표시의 1.0 같은 정수형 소수 표시를 1로 정규화
 - v1.15: 전체 분석 항아리형 그래프의 최고점·최저점 범위선 끝에 최고/최저 라벨과 점수 표시 추가
 - v1.16: 전체 분석 항아리형 그래프에 평균점수 라벨을 추가하고, 점수 구간 툴팁을 한 줄 표시로 정리
+- v1.17: 개별 반 분석 그래프의 학생수 축을 0 이상 고정하고, 확대/축소형 상호작용을 제거하며 성취수준 비율 표시 오류 수정
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -48,7 +49,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.16"
+APP_VERSION = "v1.17"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -520,12 +521,14 @@ def make_class_level_distribution_chart_df(individual_df: pd.DataFrame, selected
     levels = list("ABCDE")
     counts = df["성취수준"].value_counts().reindex(levels, fill_value=0)
     total = int(counts.sum())
+    # 내부 비율값은 앱 전체 규칙에 맞춰 0~1로 유지한다.
+    # 화면 표시 단계에서만 52.3% 형식으로 변환한다.
     out = pd.DataFrame({
         "성취수준": levels,
         "학생수(명)": counts.astype(int).values,
-        "비율(%)": [(count / total * 100) if total else 0 for count in counts.values],
+        "비율": [(count / total) if total else 0 for count in counts.values],
     })
-    return out.set_index("성취수준")
+    return out
 
 
 def item_discrimination(long_df: pd.DataFrame, student_scores: pd.DataFrame) -> pd.DataFrame:
@@ -1348,8 +1351,41 @@ def main() -> None:
                 )
                 class_level_chart_df = make_class_level_distribution_chart_df(analysis["individual"], selected_class_for_graph)
                 if not class_level_chart_df.empty:
-                    chart_data = class_level_chart_df.reset_index()
-                    st.bar_chart(chart_data, x="성취수준", y="학생수(명)", use_container_width=True, height=340)
+                    chart_data = class_level_chart_df.copy()
+                    max_count = int(pd.to_numeric(chart_data["학생수(명)"], errors="coerce").max() or 0)
+                    y_max_count = max(1, max_count + 1)
+                    st.vega_lite_chart(
+                        chart_data,
+                        {
+                            "height": 340,
+                            "width": "container",
+                            "config": {
+                                "axis": {"labelFontSize": 12, "titleFontSize": 13, "grid": True},
+                                "view": {"stroke": "transparent"},
+                            },
+                            "mark": {
+                                "type": "bar",
+                                "cornerRadiusTopLeft": 6,
+                                "cornerRadiusTopRight": 6,
+                                "tooltip": True,
+                            },
+                            "encoding": {
+                                "x": {"field": "성취수준", "type": "nominal", "axis": {"title": "성취수준"}, "sort": ["A", "B", "C", "D", "E"]},
+                                "y": {
+                                    "field": "학생수(명)",
+                                    "type": "quantitative",
+                                    "axis": {"title": "학생수(명)", "format": "d"},
+                                    "scale": {"domain": [0, y_max_count], "nice": False, "zero": True},
+                                },
+                                "tooltip": [
+                                    {"field": "성취수준", "type": "nominal", "title": "성취수준"},
+                                    {"field": "학생수(명)", "type": "quantitative", "format": "d", "title": "학생수(명)"},
+                                    {"field": "비율", "type": "quantitative", "format": ".1%", "title": "비율"},
+                                ],
+                            },
+                        },
+                        use_container_width=True,
+                    )
                     st.dataframe(fmt_percent_df(chart_data), use_container_width=True, hide_index=True)
                 else:
                     st.info("선택한 반의 성취수준 데이터가 없습니다.")
