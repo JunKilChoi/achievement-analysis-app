@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.30
+성취수준별 평가결과 분석 웹앱 v1.31
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -33,6 +33,7 @@
 - v1.28: 평가영역별/성취기준별 개인별 분석을 전체 나열 대신 반·학생 선택 후 해당 학생 표만 표시
 - v1.29: AI 분석 탭을 기본 분석(통계 기반 해석)과 고급 분석(원안지 기반 심층 해석) 구조로 개편하고, 원안지 PDF 업로드 영역과 분석별 프롬프트 초안을 추가
 - v1.30: 기본/고급 AI 분석 응답이 중간에 끊기지 않도록 max_output_tokens를 8000으로 확대
+- v1.31: 기본/고급 AI 분석 max_output_tokens를 16000으로 확대
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -1100,7 +1101,7 @@ def call_openai(api_key: str, model: str, prompt: str) -> str:
     resp = client.responses.create(
         model=model,
         input=prompt,
-        max_output_tokens=8000,
+        max_output_tokens=16000,
     )
     return getattr(resp, "output_text", "").strip()
 
