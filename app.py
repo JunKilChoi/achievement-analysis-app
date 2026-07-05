@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.25
+성취수준별 평가결과 분석 웹앱 v1.26
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -28,6 +28,7 @@
 - v1.23: 난이도 괴리 분석에서 체크박스를 제거하고 문항번호 순으로 전체 표시, 일치/불일치/예상보다 어려움/쉬움 개수 요약 추가
 - v1.24: 난이도 괴리 분석 기준 입력을 어려움/보통 난이도 구분 정답률, 보통/쉬움 난이도 구분 정답률로 분리
 - v1.25: 난이도 일치 여부 영역을 카드형으로 정리하고 기준 입력/요약 지표의 가시성 개선
+- v1.26: 데이터 확인·성취도·학급별·평가영역별·성취수준별·학생 개별·AI 분석 탭의 주요 항목을 카드형 박스로 정리
 
 주요 기능
 - 나이스 문항정보표 + 학생답 정오표 업로드
@@ -57,7 +58,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.25"
+APP_VERSION = "v1.26"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1285,21 +1286,25 @@ def main() -> None:
     ])
 
     with tab0:
-        st.markdown("#### 문항정보")
-        st.dataframe(parsed.question_df, use_container_width=True, height=260)
-        st.markdown("#### 학생 정오표")
-        st.dataframe(parsed.students_df, use_container_width=True, height=260)
-        st.markdown("#### 검증결과")
-        st.dataframe(parsed.validation_df, use_container_width=True, height=220)
+        with st.container(border=True):
+            st.markdown("#### 문항정보")
+            st.dataframe(parsed.question_df, use_container_width=True, height=260)
+        with st.container(border=True):
+            st.markdown("#### 학생 정오표")
+            st.dataframe(parsed.students_df, use_container_width=True, height=260)
+        with st.container(border=True):
+            st.markdown("#### 검증결과")
+            st.dataframe(parsed.validation_df, use_container_width=True, height=220)
 
     with tab1:
         alpha = analysis.get("alpha")
-        a1, a2, a3, a4 = st.columns(4)
-        a1.metric("평균(점)", f"{analysis['achievement'].loc[0, '평균']:.2f}")
-        a2.metric("표준편차", f"{analysis['achievement'].loc[0, '표준편차']:.2f}")
-        a3.metric("최고/최저(점)", f"{analysis['achievement'].loc[0, '최고점']:.1f} / {analysis['achievement'].loc[0, '최저점']:.1f}")
-        a4.metric("검사신뢰도 α", "-" if alpha is None else f"{alpha:.3f}")
-        st.dataframe(fmt_percent_df(analysis["achievement"]), use_container_width=True)
+        with st.container(border=True):
+            a1, a2, a3, a4 = st.columns(4)
+            a1.metric("평균(점)", f"{analysis['achievement'].loc[0, '평균']:.2f}")
+            a2.metric("표준편차", f"{analysis['achievement'].loc[0, '표준편차']:.2f}")
+            a3.metric("최고/최저(점)", f"{analysis['achievement'].loc[0, '최고점']:.1f} / {analysis['achievement'].loc[0, '최저점']:.1f}")
+            a4.metric("검사신뢰도 α", "-" if alpha is None else f"{alpha:.3f}")
+            st.dataframe(fmt_percent_df(analysis["achievement"]), use_container_width=True)
 
         graph_col1, graph_col2 = st.columns(2)
 
@@ -1528,12 +1533,14 @@ def main() -> None:
             else:
                 st.info("표시할 학급 데이터가 없습니다.")
 
-        st.markdown("#### 학급별 성취도")
-        st.dataframe(fmt_percent_df(analysis["class_achievement"]), use_container_width=True)
+        with st.container(border=True):
+            st.markdown("#### 학급별 성취도")
+            st.dataframe(fmt_percent_df(analysis["class_achievement"]), use_container_width=True)
 
     with tab2:
-        st.markdown("정답률과 변별도를 기준으로 취약 문항을 먼저 확인할 수 있습니다.")
-        st.dataframe(fmt_percent_df(analysis["item"].sort_values("정답률")), use_container_width=True, height=420)
+        with st.container(border=True):
+            st.markdown("정답률과 변별도를 기준으로 취약 문항을 먼저 확인할 수 있습니다.")
+            st.dataframe(fmt_percent_df(analysis["item"].sort_values("정답률")), use_container_width=True, height=420)
 
         st.markdown("#### 예상 난이도-실제 정답률 일치 여부")
 
@@ -1651,55 +1658,68 @@ def main() -> None:
             display_gap["실제정답률(%)"] = display_gap.pop("정답률_pct").map(lambda x: "" if pd.isna(x) else f"{x:.1f}%")
         if "차이해석" in display_gap.columns:
             display_gap = display_gap.rename(columns={"차이해석": "판정"})
-        st.dataframe(display_gap, use_container_width=True, height=320, hide_index=True)
+        with st.container(border=True):
+            st.dataframe(display_gap, use_container_width=True, height=320, hide_index=True)
 
     with tab3:
-        st.dataframe(fmt_percent_df(analysis["class_item_pivot"]), use_container_width=True, height=520)
-        st.markdown("#### 긴 형태 데이터")
-        st.dataframe(fmt_percent_df(analysis["class_item"]), use_container_width=True, height=320)
+        with st.container(border=True):
+            st.markdown("#### 학급별 문항 분석")
+            st.dataframe(fmt_percent_df(analysis["class_item_pivot"]), use_container_width=True, height=520)
+        with st.container(border=True):
+            st.markdown("#### 긴 형태 데이터")
+            st.dataframe(fmt_percent_df(analysis["class_item"]), use_container_width=True, height=320)
 
     with tab4:
-        st.dataframe(fmt_percent_df(analysis["domain"].sort_values("정답률")), use_container_width=True, height=420)
-        st.markdown("#### 학생별 평가영역 점수")
-        st.dataframe(fmt_percent_df(analysis["domain_scores"]), use_container_width=True, height=360)
+        with st.container(border=True):
+            st.markdown("#### 평가영역별 분석")
+            st.dataframe(fmt_percent_df(analysis["domain"].sort_values("정답률")), use_container_width=True, height=420)
+        with st.container(border=True):
+            st.markdown("#### 학생별 평가영역 점수")
+            st.dataframe(fmt_percent_df(analysis["domain_scores"]), use_container_width=True, height=360)
 
     with tab5:
-        st.dataframe(fmt_percent_df(analysis["level_item"].sort_values("정답률")), use_container_width=True, height=520)
+        with st.container(border=True):
+            st.markdown("#### 성취수준별 문항 분석")
+            st.dataframe(fmt_percent_df(analysis["level_item"].sort_values("정답률")), use_container_width=True, height=520)
 
     with tab6:
-        st.markdown("학생 이름은 웹앱 내부 확인용입니다. AI 분석에 보낼 때는 익명화 옵션을 권장합니다.")
-        st.dataframe(fmt_percent_df(analysis["individual"].sort_values(["반", "번호"])), use_container_width=True, height=420)
-        student_options = analysis["individual"].sort_values(["반", "번호"])["반/번호"].tolist()
-        selected_student = st.selectbox("학생 선택", student_options)
-        one_long = analysis["long"][analysis["long"]["반/번호"] == selected_student]
-        st.dataframe(fmt_percent_df(one_long[["문항번호", "평가영역", "난이도", "배점", "정답", "원본표시", "선택지", "정오", "점수", "성취기준"]]), use_container_width=True, height=360)
+        with st.container(border=True):
+            st.markdown("학생 이름은 웹앱 내부 확인용입니다. AI 분석에 보낼 때는 익명화 옵션을 권장합니다.")
+            st.dataframe(fmt_percent_df(analysis["individual"].sort_values(["반", "번호"])), use_container_width=True, height=420)
+        with st.container(border=True):
+            student_options = analysis["individual"].sort_values(["반", "번호"])["반/번호"].tolist()
+            selected_student = st.selectbox("학생 선택", student_options)
+            one_long = analysis["long"][analysis["long"]["반/번호"] == selected_student]
+            st.dataframe(fmt_percent_df(one_long[["문항번호", "평가영역", "난이도", "배점", "정답", "원본표시", "선택지", "정오", "점수", "성취기준"]]), use_container_width=True, height=360)
 
     with tab7:
-        st.markdown("AI 분석은 선택 기능입니다. 학생 개별 분석을 사용할 때는 개인정보 제공 범위를 반드시 확인하세요.")
-        api_key = st.text_input("OpenAI API Key", type="password")
-        model = st.text_input("모델", value="gpt-4o-mini")
-        mode = st.radio("분석 유형", ["전체 평가 분석", "학생 개별 분석"], horizontal=True)
-        anonymize = st.checkbox("학생 개별 분석에서 이름을 API로 보내지 않기", value=True)
-        if mode == "학생 개별 분석":
-            student_options = analysis["individual"].sort_values(["반", "번호"])["반/번호"].tolist()
-            ai_student = st.selectbox("AI 분석 대상 학생", student_options, key="ai_student")
-            prompt = build_individual_ai_prompt(parsed, analysis, ai_student, anonymize=anonymize)
-        else:
-            prompt = build_overall_ai_prompt(parsed, analysis)
-        with st.expander("AI에 전달될 요약 데이터/프롬프트 확인", expanded=False):
-            st.text_area("프롬프트", prompt, height=360)
-        if st.button("AI 분석 생성", type="primary"):
-            if not api_key:
-                st.error("OpenAI API Key를 입력하세요.")
+        with st.container(border=True):
+            st.markdown("AI 분석은 선택 기능입니다. 학생 개별 분석을 사용할 때는 개인정보 제공 범위를 반드시 확인하세요.")
+            api_key = st.text_input("OpenAI API Key", type="password")
+            model = st.text_input("모델", value="gpt-4o-mini")
+            mode = st.radio("분석 유형", ["전체 평가 분석", "학생 개별 분석"], horizontal=True)
+            anonymize = st.checkbox("학생 개별 분석에서 이름을 API로 보내지 않기", value=True)
+            if mode == "학생 개별 분석":
+                student_options = analysis["individual"].sort_values(["반", "번호"])["반/번호"].tolist()
+                ai_student = st.selectbox("AI 분석 대상 학생", student_options, key="ai_student")
+                prompt = build_individual_ai_prompt(parsed, analysis, ai_student, anonymize=anonymize)
             else:
-                with st.spinner("AI 분석을 생성하는 중입니다..."):
-                    try:
-                        result = call_openai(api_key, model, prompt)
-                        st.markdown("#### AI 분석 결과")
-                        st.write(result)
-                        st.download_button("AI 분석 결과 TXT 다운로드", result.encode("utf-8-sig"), "AI_분석결과.txt", "text/plain")
-                    except Exception as e:
-                        st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
+                prompt = build_overall_ai_prompt(parsed, analysis)
+        with st.container(border=True):
+            with st.expander("AI에 전달될 요약 데이터/프롬프트 확인", expanded=False):
+                st.text_area("프롬프트", prompt, height=360)
+            if st.button("AI 분석 생성", type="primary"):
+                if not api_key:
+                    st.error("OpenAI API Key를 입력하세요.")
+                else:
+                    with st.spinner("AI 분석을 생성하는 중입니다..."):
+                        try:
+                            result = call_openai(api_key, model, prompt)
+                            st.markdown("#### AI 분석 결과")
+                            st.write(result)
+                            st.download_button("AI 분석 결과 TXT 다운로드", result.encode("utf-8-sig"), "AI_분석결과.txt", "text/plain")
+                        except Exception as e:
+                            st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
 
     st.subheader("4. 다운로드")
     d1, d2 = st.columns(2)
