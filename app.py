@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.41
+성취수준별 평가결과 분석 웹앱 v1.42
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -44,6 +44,7 @@
 
 - v1.40: 고급 분석에서 분석 유형별 문항번호 입력 기능을 추가하고, 원안지 기반 학생 개별 문항 분석에서 반·학생 선택 후 해당 학생의 전체 풀이 결과와 원안지를 함께 분석하도록 개선
 - v1.41: AI 분석 결과를 현재 분석 조건별로 관리하여, 다운로드 시 초기화되지 않으면서 분석 유형·학생·문항 변경 시 이전 결과가 함께 저장되거나 화면에 남지 않도록 정리
+- v1.42: 복수정답 표기(예: 2,3 또는 23)와 학생답 복수답안코드 A~Z를 선택지 조합으로 변환하여 정답 판정/검증/분석에 반영
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -75,7 +76,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.40"
+APP_VERSION = "v1.42"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -131,7 +132,7 @@ def to_int_if_possible(v: Any) -> Any:
 
 
 def normalize_answer_value(v: Any) -> str:
-    """정답/표시값 비교용 정규화. 1, 1.0, '1'을 같은 값으로 본다."""
+    """정답/표시값 비교용 기본 정규화. 1, 1.0, '1'을 같은 값으로 본다."""
     text = clean_text(v).upper()
     if text == "":
         return ""
@@ -141,13 +142,52 @@ def normalize_answer_value(v: Any) -> str:
     return text
 
 
+def parse_choice_set(v: Any) -> Tuple[int, ...]:
+    """선택지 표기를 정렬된 선택지 조합으로 변환한다.
+
+    - 단일 선택: 2, 2.0, '2' -> (2,)
+    - 복수 정답: '2,3', '2, 3', '23', '2 3' -> (2, 3)
+    - 복수답안코드: A~Z -> 규약에 따른 조합
+    """
+    text = clean_text(v).upper()
+    if text in ["", ".", "-"]:
+        return tuple()
+    if text in MULTI_CODE_MAP:
+        return tuple(MULTI_CODE_MAP[text])
+
+    normalized = normalize_answer_value(text)
+    if normalized in MULTI_CODE_MAP:
+        return tuple(MULTI_CODE_MAP[normalized])
+    if re.fullmatch(r"[1-5]", normalized):
+        return (int(normalized),)
+
+    # '2,3', '2, 3', '2번 3번', '23'처럼 들어온 복수정답 표기를 모두 지원한다.
+    digits = re.findall(r"[1-5]", normalized)
+    if len(digits) >= 2 and len(digits) == len(set(digits)):
+        compact_source = re.sub(r"[^1-5]", "", normalized)
+        if compact_source == "".join(digits):
+            return tuple(sorted(int(d) for d in digits))
+    return tuple()
+
+
+def normalize_choice_answer_value(v: Any) -> str:
+    """정답 표시를 분석용 표준 표기로 변환한다. 복수정답은 '2,3'처럼 표시한다."""
+    choices = parse_choice_set(v)
+    if choices:
+        return ",".join(map(str, choices))
+    return normalize_answer_value(v)
+
+
 def normalize_mark_value(v: Any) -> str:
-    """정오표 표시용 정규화. 1.0처럼 들어온 정수형 소수는 1로 표시한다."""
+    """정오표 원본 표시용 정규화. 학생답의 A~Z 코드는 원본 코드로 보존한다."""
     text = clean_text(v).upper()
     if text in ["", ".", "-"]:
         return text
     if text in MULTI_CODE_MAP:
         return text
+    choices = parse_choice_set(text)
+    if choices:
+        return ",".join(map(str, choices))
     return normalize_answer_value(text)
 
 
@@ -158,21 +198,40 @@ def get_selected_display(raw: Any) -> Tuple[str, str]:
         return "무표기", "무표기"
     if text in MULTI_CODE_MAP:
         return ",".join(map(str, MULTI_CODE_MAP[text])), "복수답안"
+    choices = parse_choice_set(text)
+    if len(choices) >= 2:
+        return ",".join(map(str, choices)), "복수답안"
+    if len(choices) == 1:
+        return str(choices[0]), "단일답안"
     return normalize_answer_value(text), "단일답안"
 
 
 def is_correct_mark(raw: Any, correct_answer: Any) -> bool:
-    """두 종류의 정오표를 모두 지원한다.
+    """두 종류의 정오표와 복수답안코드를 모두 지원한다.
+
     1) 정답을 '.'으로 표시하는 정오표
     2) 정답이어도 정답 번호를 그대로 표시하는 정오표
-    복수답안코드 A~Z는 복수 마킹 오류로 보고 정답 처리하지 않는다.
+    3) 복수답안코드 A~Z로 표시되는 학생답 정오표
     """
     text = clean_text(raw).upper()
     if text == ".":
         return True
-    if text in ["", "-"] or text in MULTI_CODE_MAP:
+    if text in ["", "-"]:
         return False
+    selected_choices = parse_choice_set(text)
+    correct_choices = parse_choice_set(correct_answer)
+    if selected_choices and correct_choices:
+        return selected_choices == correct_choices
     return normalize_answer_value(text) == normalize_answer_value(correct_answer)
+
+
+def answers_match(a: Any, b: Any) -> bool:
+    """문항정보표 정답과 정오표 정답 검증용 비교."""
+    a_choices = parse_choice_set(a)
+    b_choices = parse_choice_set(b)
+    if a_choices or b_choices:
+        return a_choices == b_choices
+    return normalize_answer_value(a) == normalize_answer_value(b)
 
 
 def is_question_no(v: Any) -> bool:
@@ -282,7 +341,7 @@ def parse_question_info(uploaded_file: Any) -> Tuple[Dict[str, Any], pd.DataFram
                 "성취기준": clean_text(row[2] if len(row) > 2 else ""),
                 "난이도": difficulty,
                 "배점": to_number(row[6] if len(row) > 6 else None),
-                "정답": to_int_if_possible(row[7] if len(row) > 7 else None),
+                "정답": normalize_choice_answer_value(row[7] if len(row) > 7 else None),
             }
             items.append(item)
             last_item_idx = len(items) - 1
@@ -339,7 +398,7 @@ def parse_answer_sheet(uploaded_file: Any) -> Tuple[Dict[str, Any], pd.DataFrame
     for col_idx, qno in q_cols:
         ans_records.append({
             "문항번호": qno,
-            "정오표_정답": normalize_mark_value(answer_row[col_idx] if col_idx < len(answer_row) else None),
+            "정오표_정답": normalize_choice_answer_value(answer_row[col_idx] if col_idx < len(answer_row) else None),
             "정오표_배점": to_number(point_row[col_idx] if col_idx < len(point_row) else None),
         })
     answer_key_df = pd.DataFrame(ans_records)
@@ -393,7 +452,7 @@ def make_validation(qdf: pd.DataFrame, answer_key_df: pd.DataFrame) -> pd.DataFr
     if qdf.empty or answer_key_df.empty:
         return pd.DataFrame()
     vdf = qdf[["문항번호", "정답", "배점"]].merge(answer_key_df, on="문항번호", how="outer")
-    vdf["정답일치"] = vdf.apply(lambda r: normalize_answer_value(r.get("정답")) == normalize_answer_value(r.get("정오표_정답")), axis=1)
+    vdf["정답일치"] = vdf.apply(lambda r: answers_match(r.get("정답"), r.get("정오표_정답")), axis=1)
     vdf["배점일치"] = np.isclose(pd.to_numeric(vdf["배점"], errors="coerce"), pd.to_numeric(vdf["정오표_배점"], errors="coerce"), equal_nan=True)
     vdf["검증결과"] = np.where(vdf["정답일치"] & vdf["배점일치"], "정상", "확인 필요")
     return vdf
@@ -417,12 +476,12 @@ def build_long_data(qdf: pd.DataFrame, sdf: pd.DataFrame) -> pd.DataFrame:
     for _, s in sdf.iterrows():
         for qno, q in qmap.items():
             raw = clean_text(s.get(f"문항{int(qno):02d}", ""))
-            correct_answer = normalize_mark_value(q.get("정답"))
+            correct_answer = normalize_choice_answer_value(q.get("정답"))
             point = float(q.get("배점") or 0)
             selected, mark_type = get_selected_display(raw)
             is_correct = is_correct_mark(raw, correct_answer)
             if is_correct:
-                selected = normalize_answer_value(correct_answer)
+                selected = normalize_choice_answer_value(correct_answer)
                 status = "정답"
                 score = point
             elif mark_type == "무표기":
@@ -438,7 +497,7 @@ def build_long_data(qdf: pd.DataFrame, sdf: pd.DataFrame) -> pd.DataFrame:
                 "반/번호": s.get("반/번호"), "반": s.get("반"), "번호": s.get("번호"),
                 "학번": s.get("학번"), "이름": s.get("이름"), "문항번호": int(qno),
                 "평가영역": q.get("평가영역"), "성취기준": q.get("성취기준"), "난이도": q.get("난이도"),
-                "배점": point, "정답": normalize_mark_value(correct_answer), "원본표시": normalize_mark_value(raw), "선택지": normalize_mark_value(selected),
+                "배점": point, "정답": normalize_choice_answer_value(correct_answer), "원본표시": normalize_mark_value(raw), "선택지": normalize_choice_answer_value(selected),
                 "정오": status, "정답여부": is_correct, "점수": score,
             })
     return pd.DataFrame(rows)
@@ -1769,7 +1828,7 @@ def main() -> None:
     parsed.question_df = edited_question_df.copy()
     parsed.question_df["문항번호"] = pd.to_numeric(parsed.question_df["문항번호"], errors="coerce").fillna(0).astype(int)
     parsed.question_df["배점"] = pd.to_numeric(parsed.question_df["배점"], errors="coerce").fillna(0.0)
-    parsed.question_df["정답"] = parsed.question_df["정답"].apply(normalize_mark_value).apply(to_int_if_possible)
+    parsed.question_df["정답"] = parsed.question_df["정답"].apply(normalize_choice_answer_value)
     parsed.long_df = build_long_data(parsed.question_df, parsed.students_df)
     parsed.validation_df = make_validation(parsed.question_df, parsed.answer_key_df)
 
