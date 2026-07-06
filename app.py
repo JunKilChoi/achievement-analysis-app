@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.43
+성취수준별 평가결과 분석 웹앱 v1.44
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -46,6 +46,7 @@
 - v1.41: AI 분석 결과를 현재 분석 조건별로 관리하여, 다운로드 시 초기화되지 않으면서 분석 유형·학생·문항 변경 시 이전 결과가 함께 저장되거나 화면에 남지 않도록 정리
 - v1.42: 복수정답 표기(예: 2,3 또는 23)와 학생답 복수답안코드 A~Z를 선택지 조합으로 변환하여 정답 판정/검증/분석에 반영
 - v1.43: 서답형이 포함된 시험에서 성취도·총점·평균·성취수준 분석은 정오표의 영역총점을 우선 사용하고, 선택형 문항 계산점수는 검증/문항 분석용으로 분리
+- v1.44: 모든 AI 분석에 중점 분석 요청 입력 박스를 추가하고, 입력 시 기존 프롬프트 마지막에 평가 전문가 관점의 추가 분석 요청으로 반영
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -77,7 +78,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.43"
+APP_VERSION = "v1.44"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1087,6 +1088,25 @@ def build_basic_statistics_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any
 build_overall_ai_prompt = build_basic_statistics_ai_prompt
 
 
+def append_focus_request_to_prompt(prompt: str, focus_request: str) -> str:
+    """사용자가 입력한 중점 분석 요청을 기존 AI 프롬프트 마지막에 추가한다."""
+    focus_request = str(focus_request or "").strip()
+    if not focus_request:
+        return prompt
+    focus_block = f"""
+
+[의뢰자 중점 분석 요청]
+아래 내용은 의뢰자가 평가 전문가에게 특별히 중점적으로 분석해 달라고 요청한 부분이다.
+기존 분석 지시사항은 그대로 수행한 뒤, 마지막 단계에서 아래 요청을 반드시 반영하라.
+아래 요청이 기존 분석 항목과 겹치는 경우에는 같은 내용을 단순 반복하지 말고, 해당 항목을 더 구체적이고 깊이 있게 분석하라.
+분석 결과 안에서 의뢰자의 중점 분석 요청이 어떤 부분에 어떻게 반영되었는지 명시하라.
+
+의뢰자 요청:
+{focus_request}
+""".rstrip()
+    return f"{prompt.rstrip()}\n{focus_block}"
+
+
 def parse_question_number_input(raw: str, max_question: Optional[int] = None) -> List[int]:
     """쉼표/공백/범위(예: 3, 5-7)로 입력한 문항번호를 정수 목록으로 정리한다."""
     if not raw:
@@ -1417,7 +1437,14 @@ def call_openai_stream_with_pdf(api_key: str, model: str, prompt: str, pdf_bytes
 
 
 
-def make_ai_report_docx(parsed: ParsedData, analysis: Dict[str, Any], report_title: str, report_body: str, report_type: str = "AI 분석") -> bytes:
+def make_ai_report_docx(
+    parsed: ParsedData,
+    analysis: Dict[str, Any],
+    report_title: str,
+    report_body: str,
+    report_type: str = "AI 분석",
+    focus_request: str = "",
+) -> bytes:
     """AI 분석 결과를 평가정보가 포함된 Word 보고서 형태로 만든다."""
     try:
         from docx import Document
@@ -1488,6 +1515,14 @@ def make_ai_report_docx(parsed: ParsedData, analysis: Dict[str, Any], report_tit
         cells = table.add_row().cells
         cells[0].text = key
         cells[1].text = val
+
+    focus_request = str(focus_request or "").strip()
+    if focus_request:
+        doc.add_paragraph()
+        doc.add_heading("중점 분석 요청", level=1)
+        p = doc.add_paragraph()
+        p.paragraph_format.line_spacing = 1.15
+        p.add_run(focus_request)
 
     doc.add_paragraph()
     doc.add_heading("AI 분석 결과", level=1)
@@ -2358,6 +2393,16 @@ def main() -> None:
                     basic_prompt = build_basic_statistics_ai_prompt(parsed, analysis)
                     basic_download_name = "AI_기본분석_통계기반해석.docx"
 
+                basic_focus_request = st.text_area(
+                    "중점적으로 분석을 의뢰할 부분",
+                    value="",
+                    placeholder="예: 특정 오답 선택지에 학생들이 몰린 이유, 성취수준 C·D 학생의 취약 지점, 평가 타당도 관점 등을 중점적으로 분석해줘.",
+                    help="비워두면 기존 프롬프트 그대로 작동합니다. 입력하면 기존 분석을 수행한 뒤 이 요청을 마지막에 중점 반영합니다.",
+                    height=110,
+                    key="basic_focus_request",
+                )
+                basic_prompt = append_focus_request_to_prompt(basic_prompt, basic_focus_request)
+
             with st.container(border=True):
                 with st.expander("AI에 전달될 기본 분석 프롬프트 확인", expanded=False):
                     st.text_area("기본 분석 프롬프트", basic_prompt, height=420)
@@ -2398,7 +2443,7 @@ def main() -> None:
 
                             report_title = "성취수준별 평가결과 AI 분석 보고서"
                             report_type = f"기본 분석: {basic_mode}"
-                            docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type)
+                            docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type, focus_request=basic_focus_request)
 
                             st.session_state[result_state_key] = result
                             st.session_state[docx_state_key] = docx_bytes
@@ -2463,6 +2508,15 @@ def main() -> None:
                     if advanced_student_key:
                         st.caption("선택 학생의 전체 문항 풀이 결과와 원안지를 함께 분석합니다.")
 
+                advanced_focus_request = st.text_area(
+                    "중점적으로 분석을 의뢰할 부분",
+                    value="",
+                    placeholder="예: 지정 문항의 자료 해석 부담, 특정 오답 선택지의 매력도, 성취기준 적합성, 학생 개별 보충 지도 방향 등을 중점적으로 분석해줘.",
+                    help="비워두면 기존 프롬프트 그대로 작동합니다. 입력하면 원안지 기반 분석을 수행한 뒤 이 요청을 마지막에 중점 반영합니다.",
+                    height=110,
+                    key="advanced_focus_request",
+                )
+
                 pdf_name = source_pdf.name if source_pdf is not None else "원안지 PDF 미업로드"
                 advanced_prompt = build_advanced_exam_ai_prompt(
                     parsed,
@@ -2473,6 +2527,7 @@ def main() -> None:
                     student_key=advanced_student_key,
                     anonymize_student=True,
                 )
+                advanced_prompt = append_focus_request_to_prompt(advanced_prompt, advanced_focus_request)
 
             with st.container(border=True):
                 with st.expander("AI에 전달될 고급 분석 프롬프트 확인", expanded=False):
@@ -2518,7 +2573,7 @@ def main() -> None:
 
                             report_title = "성취수준별 평가결과 원안지 기반 고급 분석 보고서"
                             report_type = f"고급 분석: {advanced_scope}"
-                            docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type)
+                            docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type, focus_request=advanced_focus_request)
 
                             st.session_state[adv_result_state_key] = result
                             st.session_state[adv_docx_state_key] = docx_bytes
