@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.42
+성취수준별 평가결과 분석 웹앱 v1.43
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -45,6 +45,7 @@
 - v1.40: 고급 분석에서 분석 유형별 문항번호 입력 기능을 추가하고, 원안지 기반 학생 개별 문항 분석에서 반·학생 선택 후 해당 학생의 전체 풀이 결과와 원안지를 함께 분석하도록 개선
 - v1.41: AI 분석 결과를 현재 분석 조건별로 관리하여, 다운로드 시 초기화되지 않으면서 분석 유형·학생·문항 변경 시 이전 결과가 함께 저장되거나 화면에 남지 않도록 정리
 - v1.42: 복수정답 표기(예: 2,3 또는 23)와 학생답 복수답안코드 A~Z를 선택지 조합으로 변환하여 정답 판정/검증/분석에 반영
+- v1.43: 서답형이 포함된 시험에서 성취도·총점·평균·성취수준 분석은 정오표의 영역총점을 우선 사용하고, 선택형 문항 계산점수는 검증/문항 분석용으로 분리
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -76,7 +77,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.42"
+APP_VERSION = "v1.43"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -504,15 +505,43 @@ def build_long_data(qdf: pd.DataFrame, sdf: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_student_scores(sdf: pd.DataFrame, long_df: pd.DataFrame, total_full_score: float, cuts: Dict[str, float]) -> pd.DataFrame:
-    score_df = long_df.groupby("반/번호", as_index=False)["점수"].sum().rename(columns={"점수": "계산점수"})
+    # 문항별 정오표로 다시 계산한 점수는 선택형 문항 검증/문항 분석용으로 보존한다.
+    # 서답형이 있는 시험의 총점·성취도·성취수준은 나이스 정오표의 영역총점을 우선 사용한다.
+    score_df = long_df.groupby("반/번호", as_index=False)["점수"].sum().rename(columns={"점수": "선택형계산점수"})
     out = sdf.merge(score_df, on="반/번호", how="left")
-    out["계산점수"] = out["계산점수"].fillna(0)
-    if "영역총점" in out.columns:
+    out["선택형계산점수"] = pd.to_numeric(out["선택형계산점수"], errors="coerce").fillna(0)
+
+    for col in ["선택형점수", "서답형점수", "기타점수", "영역총점", "총점"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+
+    if "선택형점수" in out.columns:
+        out["선택형점수차이"] = out["선택형계산점수"] - out["선택형점수"].fillna(0)
+
+    if "영역총점" in out.columns and out["영역총점"].notna().any():
         out["원본총점"] = out["영역총점"]
-        out["점수차이"] = out["계산점수"] - out["원본총점"].fillna(0)
-    out["환산점수"] = out["계산점수"] / total_full_score * 100 if total_full_score else out["계산점수"]
+        final_score = out["영역총점"]
+        score_source = "영역총점"
+    elif "총점" in out.columns and out["총점"].notna().any():
+        out["원본총점"] = out["총점"]
+        final_score = out["총점"]
+        score_source = "총점"
+    else:
+        constructed = pd.Series(0.0, index=out.index)
+        for col in ["서답형점수", "기타점수"]:
+            if col in out.columns:
+                constructed = constructed + out[col].fillna(0)
+        final_score = out["선택형계산점수"] + constructed
+        out["원본총점"] = final_score
+        score_source = "선택형계산점수+서답형점수+기타점수" if constructed.abs().sum() else "선택형계산점수"
+
+    out["최종점수"] = pd.to_numeric(final_score, errors="coerce").fillna(out["선택형계산점수"])
+    # 기존 화면/엑셀/AI 코드와 호환되도록 계산점수는 최종점수와 같은 값으로 둔다.
+    out["계산점수"] = out["최종점수"]
+    out["성취도점수출처"] = score_source
+    out["환산점수"] = out["최종점수"] / total_full_score * 100 if total_full_score else out["최종점수"]
     # 성취수준은 환산점수가 아니라 시험지 자체의 원점수 기준으로 산출한다.
-    out["성취수준기준점수"] = out["계산점수"]
+    out["성취수준기준점수"] = out["최종점수"]
     out["성취수준"] = out["성취수준기준점수"].apply(lambda x: classify_level(float(x), cuts["A"], cuts["B"], cuts["C"], cuts["D"]))
     return out
 
@@ -742,7 +771,7 @@ def make_difficulty_gap_analysis(
 def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, float]) -> Dict[str, pd.DataFrame | float | None]:
     qdf, sdf0, long_df0 = parsed.question_df.copy(), parsed.students_df.copy(), parsed.long_df.copy()
     students = add_student_scores(sdf0, long_df0, total_full_score, cuts)
-    long_df = long_df0.merge(students[["반/번호", "계산점수", "환산점수", "성취수준"]], on="반/번호", how="left")
+    long_df = long_df0.merge(students[["반/번호", "계산점수", "최종점수", "선택형계산점수", "환산점수", "성취수준"]], on="반/번호", how="left")
 
     # 성취도 분석
     level_counts = students["성취수준"].value_counts().reindex(list("ABCDE"), fill_value=0)
@@ -844,7 +873,11 @@ def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, flo
     level_item_pivot["수준간격차"] = level_item_pivot[["A", "B", "C", "D", "E"]].max(axis=1) - level_item_pivot[["A", "B", "C", "D", "E"]].min(axis=1)
 
     # 학생 개별 분석용 요약
-    individual = students[["반/번호", "반", "번호", "이름", "계산점수", "환산점수", "성취수준기준점수", "성취수준"]].copy()
+    individual_cols = [
+        "반/번호", "반", "번호", "이름", "선택형계산점수", "선택형점수", "서답형점수",
+        "기타점수", "영역총점", "최종점수", "계산점수", "환산점수", "성취수준기준점수", "성취수준"
+    ]
+    individual = students[[c for c in individual_cols if c in students.columns]].copy()
     weak_items = long_df[~long_df["정답여부"]].groupby("반/번호")["문항번호"].apply(lambda s: ", ".join(map(str, sorted(s.tolist())))).reset_index(name="오답문항")
     individual = individual.merge(weak_items, on="반/번호", how="left")
     individual["오답문항"] = individual["오답문항"].fillna("")
@@ -1171,7 +1204,8 @@ def build_advanced_exam_ai_prompt(
             student_block = f"""
 [학생 개별 요약]
 - 대상: {student_label}
-- 계산점수: {round(float(srow['계산점수']), 2)}점
+- 최종점수: {round(float(srow['최종점수']), 2)}점
+- 선택형 계산점수: {round(float(srow.get('선택형계산점수', srow['계산점수'])), 2)}점
 - 환산점수: {round(float(srow['환산점수']), 2)}점
 - 성취수준: {srow['성취수준']}
 
@@ -1274,7 +1308,8 @@ def build_individual_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], stu
 {student_label}
 
 [점수 요약]
-계산점수: {round(float(s['계산점수']), 2)}점
+최종점수: {round(float(s['최종점수']), 2)}점
+선택형 계산점수: {round(float(s.get('선택형계산점수', s['계산점수'])), 2)}점
 환산점수: {round(float(s['환산점수']), 2)}점
 성취수준: {s['성취수준']}
 
