@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.74
+성취수준별 평가결과 분석 웹앱 v1.75
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -75,6 +75,7 @@
 - v1.72: 성취도 분석의 개별 반 그래프에 전체 성취수준 비율을 빨간색 기준점으로 함께 표시하여 선택 반과 전체를 비교하도록 개선
 - v1.73: 성취도 분석의 개별 반 그래프를 선택 반 파란색 막대와 전체 빨간색 막대가 성취수준별로 나란히 보이도록 변경하고 동적 범례를 추가
 - v1.74: 개별 반 성취수준 비교 그래프의 범례를 제거하고 문항별 분석의 난이도 비교 표 높이를 확대
+- v1.75: 학급별 문항 분석 표에서 정답률, 변별도, 학급간 최대차 열을 서로 다른 색으로 강조
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -109,7 +110,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.74"
+APP_VERSION = "v1.75"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1867,6 +1868,20 @@ def render_wrapped_table(df: pd.DataFrame, key: str = "wrapped-table") -> None:
     st.markdown(table_html, unsafe_allow_html=True)
 
 
+def style_class_item_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    """학급별 문항 분석에서 핵심 해석 열을 색으로 구분해 강조한다."""
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+    for col in df.columns:
+        name = str(col)
+        if "학급간최대차" in name or "학급간 최대차" in name:
+            styles[col] = "background-color: #fff3cd; font-weight: 700;"
+        elif "변별도" in name:
+            styles[col] = "background-color: #f3e8ff; font-weight: 700;"
+        elif "정답률" in name:
+            styles[col] = "background-color: #e8f2ff; font-weight: 700;"
+    return df.style.apply(lambda _: styles, axis=None)
+
+
 def fmt_percent_df(df: pd.DataFrame, digits: int = 1) -> pd.DataFrame:
     """Streamlit 화면 표시용: 데이터에 %를 포함하고 헤더에 단위를 붙인다."""
     return format_output_df(df, digits=digits, add_units=True)
@@ -2954,7 +2969,8 @@ def main() -> None:
             class_rate_cols = [c for c in class_item_view.columns if str(c).endswith("반_정답률") or str(c) == "미상반_정답률"]
             if class_rate_cols:
                 class_item_view["학급간최대차"] = class_item_view[class_rate_cols].max(axis=1) - class_item_view[class_rate_cols].min(axis=1)
-            st.dataframe(fmt_percent_df(class_item_view.sort_values("문항번호", ascending=True)), use_container_width=True, height=520, hide_index=True)
+            class_item_display = fmt_percent_df(class_item_view.sort_values("문항번호", ascending=True))
+            st.dataframe(style_class_item_analysis_df(class_item_display), use_container_width=True, height=520, hide_index=True)
 
         with st.container(border=True):
             st.markdown("#### 학급 간 정답률 차이가 큰 문항")
