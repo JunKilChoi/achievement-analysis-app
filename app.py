@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.56
+성취수준별 평가결과 분석 웹앱 v1.58
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -60,6 +60,7 @@
 - v1.55: 문항정보표 업로드 파일을 제거하면 문항정보 수정 세션을 초기화하여 같은 파일을 다시 올릴 때 원본 문항정보를 다시 읽도록 수정
 - v1.56: 문항정보 수정 영역에서 문항 추가 버튼을 적용 버튼 옆으로 이동하고 선택 문항 삭제 버튼을 삭제 체크 열 하단으로 배치
 - v1.57: 문항정보 수정 영역의 문항정보 수정값 적용, 문항 추가, 선택 문항 삭제 버튼을 한 줄에 나란히 배치
+- v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -92,7 +93,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.57"
+APP_VERSION = "v1.58"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1965,6 +1966,8 @@ def main() -> None:
             "question_info_editor_signature",
             "question_info_editor_df",
             "question_info_editor_applied_at",
+            "auto_recognition_editor_signature",
+            "auto_recognition_editor_values",
         ]:
             st.session_state.pop(key, None)
 
@@ -1978,14 +1981,56 @@ def main() -> None:
         st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
         st.stop()
 
+    auto_info_signature = make_question_editor_signature(question_file, answer_files)
+    auto_info_sig_key = "auto_recognition_editor_signature"
+    auto_info_state_key = "auto_recognition_editor_values"
+
+    def safe_int(value: Any, default: int = 0) -> int:
+        num = pd.to_numeric(value, errors="coerce")
+        if pd.isna(num):
+            return int(default)
+        return int(num)
+
+    def safe_float(value: Any, default: float = 0.0) -> float:
+        num = pd.to_numeric(value, errors="coerce")
+        if pd.isna(num):
+            return float(default)
+        return float(num)
+
+    def default_auto_info_values() -> Dict[str, Any]:
+        selected_full = safe_float(parsed.exam_info.get("선택형만점"), safe_float(parsed.question_df["배점"].fillna(0).sum() if "배점" in parsed.question_df.columns else 0.0, 0.0))
+        written_full = safe_float(parsed.exam_info.get("서답형만점"), 0.0)
+        total_full = safe_float(parsed.exam_info.get("과목만점"), selected_full + written_full)
+        return {
+            "학년도": str(parsed.exam_info.get("학년도", "2026")),
+            "학년": str(parsed.exam_info.get("학년", "1학년")),
+            "학기": str(parsed.exam_info.get("학기", "1학기")),
+            "평가구분": str(parsed.exam_info.get("평가구분", "중간고사")),
+            "교과목": str(parsed.exam_info.get("교과목", "과학")),
+            "선택형문항수": safe_int(parsed.exam_info.get("선택형문항수"), len(parsed.question_df)),
+            "서답형문항수": safe_int(parsed.exam_info.get("서답형문항수"), 0),
+            "학생수": safe_int(parsed.exam_info.get("학생수"), len(parsed.students_df)),
+            "정오표파일수": safe_int(parsed.exam_info.get("정오표파일수"), len(answer_files)),
+            "선택형만점": selected_full,
+            "서답형만점": written_full,
+            "과목만점": total_full,
+        }
+
+    if st.session_state.get(auto_info_sig_key) != auto_info_signature:
+        st.session_state[auto_info_sig_key] = auto_info_signature
+        st.session_state[auto_info_state_key] = default_auto_info_values()
+
+    auto_info_values = {**default_auto_info_values(), **st.session_state.get(auto_info_state_key, {})}
+    parsed.exam_info.update(auto_info_values)
+
     st.subheader("1. 자동 인식 결과")
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("교과목", parsed.exam_info.get("교과목", "-"))
     m2.metric("학년/학기", f"{parsed.exam_info.get('학년', '-')}/{parsed.exam_info.get('학기', '-')}")
     m3.metric("선택형 문항 수", parsed.exam_info.get("선택형문항수", len(parsed.question_df)))
     m4.metric("서답형 문항 수", parsed.exam_info.get("서답형문항수", 0) if parsed.exam_info.get("서답형문항수") is not None else "확인 필요")
-    m5.metric("학생 수", len(parsed.students_df))
-    m6.metric("정오표 파일 수", parsed.exam_info.get("정오표파일수", 1))
+    m5.metric("학생 수", parsed.exam_info.get("학생수", len(parsed.students_df)))
+    m6.metric("정오표 파일 수", parsed.exam_info.get("정오표파일수", len(answer_files)))
 
     s1, s2, s3 = st.columns(3)
     s1.metric("선택형 만점", parsed.exam_info.get("선택형만점", "-"))
@@ -1993,13 +2038,31 @@ def main() -> None:
     s3.metric("과목 만점", parsed.exam_info.get("과목만점", "-"))
 
     with st.expander("평가정보 자동 인식값 수정", expanded=False):
-        cols = st.columns(6)
-        parsed.exam_info["학년도"] = cols[0].text_input("학년도", parsed.exam_info.get("학년도", "2026"))
-        parsed.exam_info["학년"] = cols[1].text_input("학년", parsed.exam_info.get("학년", "1학년"))
-        parsed.exam_info["학기"] = cols[2].text_input("학기", parsed.exam_info.get("학기", "1학기"))
-        parsed.exam_info["평가구분"] = cols[3].text_input("평가구분", parsed.exam_info.get("평가구분", "중간고사"))
-        parsed.exam_info["교과목"] = cols[4].text_input("교과목", parsed.exam_info.get("교과목", "과학"))
-        parsed.exam_info["서답형문항수"] = int(cols[5].number_input("서답형 문항 수", min_value=0, value=int(parsed.exam_info.get("서답형문항수") or 0), step=1))
+        st.caption("위 자동 인식 결과에 표시된 값을 모두 수정할 수 있습니다. 학생 수와 정오표 파일 수는 실제 데이터 행을 바꾸는 값이 아니라 보고서와 AI 분석에 표시되는 평가 정보입니다.")
+        cols = st.columns(5)
+        auto_info_values["학년도"] = cols[0].text_input("학년도", auto_info_values.get("학년도", "2026"), key=f"auto_year_{auto_info_signature[:8]}")
+        auto_info_values["학년"] = cols[1].text_input("학년", auto_info_values.get("학년", "1학년"), key=f"auto_grade_{auto_info_signature[:8]}")
+        auto_info_values["학기"] = cols[2].text_input("학기", auto_info_values.get("학기", "1학기"), key=f"auto_semester_{auto_info_signature[:8]}")
+        auto_info_values["평가구분"] = cols[3].text_input("평가구분", auto_info_values.get("평가구분", "중간고사"), key=f"auto_eval_type_{auto_info_signature[:8]}")
+        auto_info_values["교과목"] = cols[4].text_input("교과목", auto_info_values.get("교과목", "과학"), key=f"auto_subject_{auto_info_signature[:8]}")
+
+        cols = st.columns(4)
+        auto_info_values["선택형문항수"] = int(cols[0].number_input("선택형 문항 수", min_value=0, value=safe_int(auto_info_values.get("선택형문항수"), len(parsed.question_df)), step=1, key=f"auto_selected_q_count_{auto_info_signature[:8]}"))
+        auto_info_values["서답형문항수"] = int(cols[1].number_input("서답형 문항 수", min_value=0, value=safe_int(auto_info_values.get("서답형문항수"), 0), step=1, key=f"auto_written_q_count_{auto_info_signature[:8]}"))
+        auto_info_values["학생수"] = int(cols[2].number_input("학생 수", min_value=0, value=safe_int(auto_info_values.get("학생수"), len(parsed.students_df)), step=1, key=f"auto_student_count_{auto_info_signature[:8]}"))
+        auto_info_values["정오표파일수"] = int(cols[3].number_input("정오표 파일 수", min_value=0, value=safe_int(auto_info_values.get("정오표파일수"), len(answer_files)), step=1, key=f"auto_answer_file_count_{auto_info_signature[:8]}"))
+
+        cols = st.columns(3)
+        auto_info_values["선택형만점"] = float(cols[0].number_input("선택형 만점", min_value=0.0, value=safe_float(auto_info_values.get("선택형만점"), 0.0), step=1.0, key=f"auto_selected_full_score_{auto_info_signature[:8]}"))
+        auto_info_values["서답형만점"] = float(cols[1].number_input("서답형 만점", min_value=0.0, value=safe_float(auto_info_values.get("서답형만점"), 0.0), step=1.0, key=f"auto_written_full_score_{auto_info_signature[:8]}"))
+        auto_info_values["과목만점"] = float(cols[2].number_input("과목 만점", min_value=0.0, value=safe_float(auto_info_values.get("과목만점"), 0.0), step=1.0, key=f"auto_total_full_score_{auto_info_signature[:8]}"))
+
+        if st.button("자동 인식값을 원본으로 되돌리기", key=f"reset_auto_info_{auto_info_signature[:8]}"):
+            st.session_state[auto_info_state_key] = default_auto_info_values()
+            st.rerun()
+
+    st.session_state[auto_info_state_key] = auto_info_values.copy()
+    parsed.exam_info.update(auto_info_values)
 
     st.subheader("2. 문항정보 수정")
     st.caption("나이스 문항정보표에서 자동 인식한 값입니다. 평가 후 분석 자료를 더 구체화하려면 평가영역, 성취기준, 난이도 등을 여기서 수정하세요. 수정한 값은 아래 분석 결과, 확인용 엑셀, 5종 분석 엑셀, AI 분석에 모두 반영됩니다.")
@@ -2253,12 +2316,11 @@ def main() -> None:
                 render_standard_card(str(standard), group, idx)
 
     st.subheader("3. 분석 기준")
-    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
-    parsed.exam_info["선택형만점"] = c5.number_input("선택형 만점", value=float(parsed.exam_info.get("선택형만점", parsed.question_df["배점"].fillna(0).sum() or 100.0)), step=1.0)
-    parsed.exam_info["서답형만점"] = c6.number_input("서답형 만점", value=float(parsed.exam_info.get("서답형만점", 0.0) or 0.0), step=1.0)
-    default_total = float(parsed.exam_info.get("과목만점", parsed.exam_info["선택형만점"] + parsed.exam_info["서답형만점"]) or 100.0)
-    total_full_score = c7.number_input("과목 만점", value=default_total, step=1.0)
-    parsed.exam_info["과목만점"] = total_full_score
+    st.caption("선택형 만점, 서답형 만점, 과목 만점은 1. 자동 인식 결과의 '평가정보 자동 인식값 수정'에서 조정할 수 있습니다.")
+    parsed.exam_info["선택형만점"] = safe_float(parsed.exam_info.get("선택형만점"), safe_float(parsed.question_df["배점"].fillna(0).sum() if "배점" in parsed.question_df.columns else 0.0, 0.0))
+    parsed.exam_info["서답형만점"] = safe_float(parsed.exam_info.get("서답형만점"), 0.0)
+    total_full_score = safe_float(parsed.exam_info.get("과목만점"), parsed.exam_info["선택형만점"] + parsed.exam_info["서답형만점"] or 100.0)
+    c1, c2, c3, c4 = st.columns(4)
     cut_a = c1.number_input("A/B 분할점수", value=round(total_full_score * 0.9, 1), step=1.0, key="cut_a_raw")
     cut_b = c2.number_input("B/C 분할점수", value=round(total_full_score * 0.8, 1), step=1.0, key="cut_b_raw")
     cut_c = c3.number_input("C/D 분할점수", value=round(total_full_score * 0.7, 1), step=1.0, key="cut_c_raw")
