@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.66
+성취수준별 평가결과 분석 웹앱 v1.67
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -67,6 +67,7 @@
 - v1.63: 성취도 분석의 표준편차 해석 안내를 다른 부연 설명과 비슷한 간결한 안내 박스 형태로 조정
 - v1.64: 성취도 분석 탭에서 전체 분석 그래프와 개별 반 분석 그래프를 각각 카드형 영역으로 분리하고, 전체/개별 반 성취수준별 비율 표를 그래프 아래에 나란히 표시
 - v1.66: 학급별 문항 분석 탭에 학급 간 정답률 차이, 학급별 취약 문항 TOP 5, 문항 선택형 학급별 선택지 반응 비교 추가
+- v1.67: 분석 결과 영역의 메인 탭을 한 번에 하나만 렌더링하는 선택형 메뉴로 변경하여 드롭박스 변경 후 탭 내용이 한 페이지에 펼쳐지는 현상 방지
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -101,7 +102,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.66"
+APP_VERSION = "v1.67"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2452,11 +2453,18 @@ def main() -> None:
     else:
         st.warning("문항정보표와 학생답 정오표의 정답/배점이 다른 문항이 있습니다. 검증결과 탭에서 확인하세요.")
 
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    analysis_tab_labels = [
         "데이터 확인", "성취도 분석", "문항별 분석", "학급별 분석", "평가영역별 분석", "성취기준별 분석", "성취수준별 분석", "학생 개별", "AI 분석"
-    ])
+    ]
+    selected_analysis_tab = st.radio(
+        "분석 영역 선택",
+        analysis_tab_labels,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="main_analysis_section_selector",
+    )
 
-    with tab0:
+    if selected_analysis_tab == "데이터 확인":
         with st.container(border=True):
             st.markdown("#### 문항정보")
             st.dataframe(parsed.question_df, use_container_width=True, height=260)
@@ -2467,7 +2475,7 @@ def main() -> None:
             st.markdown("#### 검증결과")
             st.dataframe(parsed.validation_df, use_container_width=True, height=220)
 
-    with tab1:
+    elif selected_analysis_tab == "성취도 분석":
         alpha = analysis.get("alpha")
         with st.container(border=True):
             a1, a2, a3, a4 = st.columns(4)
@@ -2728,7 +2736,7 @@ def main() -> None:
             st.markdown("#### 학급별 성취도")
             st.dataframe(fmt_percent_df(analysis["class_achievement"]), use_container_width=True)
 
-    with tab2:
+    elif selected_analysis_tab == "문항별 분석":
         with st.container(border=True):
             st.markdown("정답률과 변별도를 기준으로 취약 문항을 먼저 확인할 수 있습니다.")
             st.info(
@@ -2868,7 +2876,7 @@ def main() -> None:
         with st.container(border=True):
             st.dataframe(display_gap, use_container_width=True, height=320, hide_index=True)
 
-    with tab3:
+    elif selected_analysis_tab == "학급별 분석":
         with st.container(border=True):
             st.markdown("#### 학급별 문항 분석")
             st.markdown(
@@ -2962,7 +2970,7 @@ def main() -> None:
         with st.expander("학급별 문항 분석 원자료 보기", expanded=False):
             st.dataframe(fmt_percent_df(analysis["class_item"]), use_container_width=True, height=320)
 
-    with tab4:
+    elif selected_analysis_tab == "평가영역별 분석":
         with st.container(border=True):
             st.markdown("#### 평가영역별 분석")
             st.dataframe(fmt_percent_df(analysis["domain"].sort_values("정답률")), use_container_width=True, height=420)
@@ -2974,7 +2982,7 @@ def main() -> None:
                 domain_cols = [c for c in ["평가영역", "영역점수", "영역배점", "영역환산점수", "영역정답률"] if c in domain_one.columns]
                 st.dataframe(fmt_percent_df(domain_one[domain_cols].sort_values("평가영역")), use_container_width=True, height=260, hide_index=True)
 
-    with tab5:
+    elif selected_analysis_tab == "성취기준별 분석":
         with st.container(border=True):
             st.markdown("#### 성취기준별 분석")
             standard_cols = [c for c in ["성취기준", "평가영역", "문항번호", "문항수", "배점합계", "평균점수", "환산평균", "정답률"] if c in analysis["standard"].columns]
@@ -2993,12 +3001,12 @@ def main() -> None:
                 standard_cols_one = [c for c in ["성취기준", "평가영역", "문항번호", "성취기준점수", "성취기준배점", "성취기준환산점수", "성취기준정답률"] if c in standard_one.columns]
                 st.dataframe(fmt_percent_df(standard_one[standard_cols_one].sort_values("성취기준")), use_container_width=True, height=360, hide_index=True)
 
-    with tab6:
+    elif selected_analysis_tab == "성취수준별 분석":
         with st.container(border=True):
             st.markdown("#### 성취수준별 문항 분석")
             st.dataframe(fmt_percent_df(analysis["level_item"].sort_values("정답률")), use_container_width=True, height=520)
 
-    with tab7:
+    elif selected_analysis_tab == "학생 개별":
         with st.container(border=True):
             st.markdown("학생 이름은 웹앱 내부 확인용입니다. AI 분석에 보낼 때는 익명화 옵션을 권장합니다.")
             st.dataframe(fmt_percent_df(analysis["individual"].sort_values(["반", "번호"])), use_container_width=True, height=420)
@@ -3008,7 +3016,7 @@ def main() -> None:
             one_long = analysis["long"][analysis["long"]["반/번호"] == selected_student]
             st.dataframe(fmt_percent_df(one_long[["문항번호", "평가영역", "난이도", "배점", "정답", "원본표시", "선택지", "정오", "점수", "성취기준"]]), use_container_width=True, height=360)
 
-    with tab8:
+    elif selected_analysis_tab == "AI 분석":
         with st.container(border=True):
             st.markdown("#### AI 분석")
             st.markdown("기본 분석은 원안지 없이 통계 자료를 바탕으로 해석하고, 고급 분석은 원안지 PDF를 함께 활용하는 구조입니다.")
