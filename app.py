@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.47
+성취수준별 평가결과 분석 웹앱 v1.49
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -51,6 +51,7 @@
 - v1.46: 문항정보 수정 단계에 평가요소를 구체적으로 수정하도록 안내하는 강조 문구 추가
 - v1.47: 문항정보 수정 단계의 평가요소 하이라이트 확인용 표 제거
 - v1.48: 수정된 문항정보 요약을 성취기준별 평가요소·난이도·총점 구조로 재정리
+- v1.49: 수정된 문항정보 요약과 성취기준-평가요소별 상세 구성 표를 줄바꿈형 표로 표시해 긴 셀 내용을 읽기 쉽게 개선
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -64,6 +65,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import io
 import re
 import zipfile
@@ -82,7 +84,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.48"
+APP_VERSION = "v1.49"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1752,6 +1754,63 @@ def format_output_df(df: pd.DataFrame, digits: int = 1, add_units: bool = True) 
     return out
 
 
+
+
+def render_wrapped_table(df: pd.DataFrame, key: str = "wrapped-table") -> None:
+    """긴 텍스트 셀이 줄바꿈되도록 읽기 전용 HTML 표로 표시한다."""
+    if df is None or df.empty:
+        st.info("표시할 데이터가 없습니다.")
+        return
+
+    display_df = df.copy().fillna("")
+
+    def cell_text(value: Any) -> str:
+        text = str(value)
+        return html.escape(text).replace(" / ", "<br>").replace(" · ", "<br>")
+
+    header_html = "".join(f"<th>{html.escape(str(col))}</th>" for col in display_df.columns)
+    body_rows = []
+    for _, row in display_df.iterrows():
+        body_rows.append("<tr>" + "".join(f"<td>{cell_text(row[col])}</td>" for col in display_df.columns) + "</tr>")
+
+    table_html = f"""
+    <style>
+    .{key} {{
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+        font-size: 0.92rem;
+    }}
+    .{key} th {{
+        background: #f7f7f8;
+        border: 1px solid #e5e7eb;
+        padding: 8px 10px;
+        text-align: left;
+        vertical-align: top;
+        white-space: normal;
+        word-break: keep-all;
+    }}
+    .{key} td {{
+        border: 1px solid #e5e7eb;
+        padding: 8px 10px;
+        vertical-align: top;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: keep-all;
+        line-height: 1.45;
+    }}
+    .{key} th:nth-child(1), .{key} td:nth-child(1) {{ width: 22%; }}
+    .{key} th:nth-child(2), .{key} td:nth-child(2) {{ width: 10%; }}
+    .{key} th:nth-child(3), .{key} td:nth-child(3) {{ width: 8%; }}
+    </style>
+    <table class="{key}">
+        <thead><tr>{header_html}</tr></thead>
+        <tbody>{''.join(body_rows)}</tbody>
+    </table>
+    """
+    st.markdown(table_html, unsafe_allow_html=True)
+
+
 def fmt_percent_df(df: pd.DataFrame, digits: int = 1) -> pd.DataFrame:
     """Streamlit 화면 표시용: 데이터에 %를 포함하고 헤더에 단위를 붙인다."""
     return format_output_df(df, digits=digits, add_units=True)
@@ -2000,7 +2059,7 @@ def main() -> None:
                 "문항별 구성": item_layout(group),
             })
         standard_summary_df = pd.DataFrame(standard_summary_rows)
-        st.dataframe(format_output_df(standard_summary_df), use_container_width=True, hide_index=True)
+        render_wrapped_table(format_output_df(standard_summary_df), key="standard-summary-wrap-table")
 
         with st.expander("성취기준-평가요소별 상세 구성", expanded=False):
             detail_df = q_summary.groupby(["성취기준", "평가영역", "난이도"], dropna=False, sort=False).agg(
@@ -2008,7 +2067,7 @@ def main() -> None:
                 배점합계=("배점", "sum"),
                 문항번호=("문항번호", lambda x: ", ".join(map(str, sorted([int(v) for v in x if pd.notna(v)])))),
             ).reset_index()
-            st.dataframe(format_output_df(detail_df), use_container_width=True, hide_index=True)
+            render_wrapped_table(format_output_df(detail_df), key="standard-detail-wrap-table")
 
     st.subheader("3. 분석 기준")
     c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
