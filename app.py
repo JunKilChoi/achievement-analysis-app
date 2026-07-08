@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.50
+성취수준별 평가결과 분석 웹앱 v1.51
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -53,6 +53,7 @@
 - v1.48: 수정된 문항정보 요약을 성취기준별 평가요소·난이도·총점 구조로 재정리
 - v1.49: 수정된 문항정보 요약과 성취기준-평가요소별 상세 구성 표를 줄바꿈형 표로 표시해 긴 셀 내용을 읽기 쉽게 개선
 - v1.50: 수정된 문항정보 요약을 표 대신 성취기준별 카드형 목록으로 재구성
+- v1.51: 성취기준별 카드형 요약에서 불필요한 “성취기준 1/2” 번호 제목을 제거하고 성취기준 내용을 바로 표시
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -85,7 +86,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.50"
+APP_VERSION = "v1.51"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2062,7 +2063,6 @@ def main() -> None:
 
             card_html = f"""
             <div class="standard-summary-card">
-                <div class="standard-card-title">성취기준 {idx}</div>
                 <div class="standard-card-standard">{html.escape(str(standard))}</div>
                 <div class="standard-card-metrics">
                     <div><span>총점</span><strong>{total_score:.1f}점</strong></div>
@@ -2094,12 +2094,6 @@ def main() -> None:
                 margin: 14px 0;
                 background: #ffffff;
                 box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
-            }
-            .standard-card-title {
-                font-size: 0.9rem;
-                font-weight: 700;
-                color: #4b5563;
-                margin-bottom: 6px;
             }
             .standard-card-standard {
                 font-size: 1.02rem;
