@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.81
+성취수준별 평가결과 분석 웹앱 v1.82
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -81,7 +81,7 @@
 - v1.78: 평가영역별 분석 표에서 평균정답률을 숨기고 정답률 열을 강조 표시
 - v1.79: 성취기준별 분석 표에서 성취기준과 정답률 열을 강조하고 기본 정렬을 성취기준 오름차순으로 변경
 - v1.80: 성취수준별 문항 분석 탭에서 문항번호 순 정렬, 빈 성취수준 표시 보정, 안내 문구를 추가하여 표가 비어 보이는 문제를 개선
-- v1.81: 학생 개별 탭의 요약표에서 중복 점수 열을 숨기고 환산점수명을 100점 만점 환산점수로 변경하며 영역총점과 성취수준을 강조 표시
+- v1.82: 화면 표시용 점수 계열 숫자를 모든 탭에서 소수점 첫째 자리까지 표시하도록 통일
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -116,7 +116,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.81"
+APP_VERSION = "v1.82"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1808,12 +1808,45 @@ def add_unit_headers(df: pd.DataFrame) -> pd.DataFrame:
     return out.rename(columns=rename_map)
 
 
+def is_score_display_column(col: Any, series: Optional[pd.Series] = None) -> bool:
+    """점수 계열 화면 표시용 컬럼 판별. 문항번호·정답·선택지 같은 식별/답안 컬럼은 제외한다."""
+    name = str(col).strip()
+    excluded_exact = {
+        "문항번호", "문항", "번호", "반", "정답", "선택지", "원본표시", "정오",
+        "학년도", "학기", "선택형문항수", "서답형문항수", "정오표파일수",
+        "학생수", "응시자수", "정답자수", "문항수", "오답문항"
+    }
+    if name in excluded_exact:
+        return False
+    if name.endswith("문항번호") or name.endswith("번호"):
+        return False
+    # 비율 컬럼은 별도로 % 형식 처리한다.
+    if is_percent_column(col, series):
+        return False
+    score_keywords = [
+        "점수", "배점", "만점", "총점", "평균", "최고점", "최저점", "환산",
+        "영역점수", "영역배점", "배점합계", "계산점수", "표준편차"
+    ]
+    if not any(k in name for k in score_keywords):
+        return False
+    nums = pd.to_numeric(series, errors="coerce") if series is not None else None
+    return nums is None or nums.notna().any()
+
+
+def score_display_columns(df: pd.DataFrame) -> List[Any]:
+    return [col for col in df.columns if is_score_display_column(col, df[col])]
+
+
 def format_output_df(df: pd.DataFrame, digits: int = 1, add_units: bool = True) -> pd.DataFrame:
-    """화면/엑셀/AI 출력용: 비율값은 문자열 %로 보존하고 헤더에는 단위를 붙인다."""
+    """화면/엑셀/AI 출력용: 비율은 %, 점수 계열은 소수점 첫째 자리로 표시하고 헤더에는 단위를 붙인다."""
     out = df.copy()
-    for col in percent_columns(out):
+    percent_cols = percent_columns(out)
+    for col in percent_cols:
         nums = pd.to_numeric(out[col], errors="coerce")
         out[col] = nums.map(lambda x: "" if pd.isna(x) else f"{x * 100:.{digits}f}%")
+    for col in score_display_columns(out):
+        nums = pd.to_numeric(out[col], errors="coerce")
+        out[col] = nums.map(lambda x: "" if pd.isna(x) else f"{x:.1f}")
     if add_units:
         out = add_unit_headers(out)
     return out
@@ -2298,7 +2331,7 @@ def main() -> None:
             diff_options = ["", "어려움", "보통", "쉬움"]
             diff_index = diff_options.index(diff_value) if diff_value in diff_options else 0
             difficulty = c4.selectbox("난이도", options=diff_options, index=diff_index, key=f"diff_{editor_signature[:8]}_{row_id}", label_visibility="collapsed")
-            score = c5.number_input("배점", min_value=0.0, step=0.1, value=float(pd.to_numeric(row.get("배점", 0), errors="coerce") or 0.0), key=f"score_{editor_signature[:8]}_{row_id}", label_visibility="collapsed", format="%.2f")
+            score = c5.number_input("배점", min_value=0.0, step=0.1, value=float(pd.to_numeric(row.get("배점", 0), errors="coerce") or 0.0), key=f"score_{editor_signature[:8]}_{row_id}", label_visibility="collapsed", format="%.1f")
             answer = c6.text_input("정답", value=str(row.get("정답", "")), key=f"ans_{editor_signature[:8]}_{row_id}", label_visibility="collapsed", placeholder="예: 3 또는 2,3")
             delete_row = c7.checkbox("삭제", value=False, key=f"del_{editor_signature[:8]}_{row_id}", label_visibility="collapsed")
             edited_rows.append({"문항번호": q_no, "평가영역": eval_area, "성취기준": standard, "난이도": difficulty, "배점": score, "정답": answer, "_row_id": row_id, "삭제": delete_row})
