@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.92
+성취수준별 평가결과 분석 웹앱 v1.90
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -87,7 +87,6 @@
 - v1.86: AI 분석 내부의 기본/고급 분석 전환을 탭에서 선택형 메뉴로 변경하여 기본 분석 선택 시 고급 분석 영역이 함께 펼쳐지는 현상 수정
 - v1.87: 원안지 기반 고급 분석 전용 프리셋이 확실히 표시되도록 상태키를 분리하고 프리셋 안내 문구를 보강
 - v1.88: 고급 분석에서 별도의 분석 범위 선택을 제거하고, 원안지 기반 고급 분석 프리셋 중심으로 실행되도록 단순화
-- v1.92: 웹앱 표의 헤더와 짧은 텍스트·숫자형 셀을 가운데 정렬하되, 기존 표 구성·색상·데이터 형식은 유지
 - v1.89: Word AI 분석 보고서의 평가 정보 영역을 공문서형 요약 표와 강조 박스 중심 양식으로 개선
 - v1.90: 나이스 문항정보표가 없는 학교를 위해 앱 전용 문항정보표 양식 다운로드와 업로드 인식 기능 추가
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
@@ -125,7 +124,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.92"
+APP_VERSION = "v1.90"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2297,115 +2296,71 @@ def render_wrapped_table(df: pd.DataFrame, key: str = "wrapped-table") -> None:
     st.markdown(table_html, unsafe_allow_html=True)
 
 
-def _normalize_display_col_name(col: Any) -> str:
-    """표시용 단위가 붙은 컬럼명에서 실제 이름을 뽑는다."""
-    return re.sub(r"\([%명점개]\)$", "", str(col).strip())
-
-
-def is_center_align_display_column(df: pd.DataFrame, col: Any) -> bool:
-    """웹앱 표에서 가운데 정렬할 짧은 텍스트/숫자형 컬럼을 판별한다.
-
-    데이터 값 자체는 바꾸지 않고 표시 정렬만 조정한다.
-    긴 서술형 열은 가독성을 위해 기본 정렬을 유지한다.
-    """
-    name = _normalize_display_col_name(col)
-    exact_center_cols = {
-        "문항번호", "문항", "반", "번호", "반/번호", "학년", "학기", "학년도",
-        "선택형문항수", "서답형문항수", "정오표파일수", "학생수", "응시자수", "정답자수", "문항수",
-        "난이도", "예상난이도", "실제난이도", "기대정답률구간", "판정", "괴리여부",
-        "정답", "선택지", "원본표시", "정오", "정답여부", "성취수준",
-        "배점", "점수", "영역점수", "영역배점", "영역총점", "선택형점수", "서답형점수", "기타점수",
-        "100점 만점 환산점수", "환산점수", "환산평균", "평균", "평균점수", "최고점", "최저점", "표준편차",
-        "정답률", "전체정답률", "전체 정답률", "변별도", "학급간최대차", "학급간 최대차", "학급간차이",
-        "최고학급", "최저학급", "최고정답률", "최저정답률", "수준간격차", "수준 간 격차",
-        "A", "B", "C", "D", "E"
-    }
-    if name in exact_center_cols:
-        return True
-    if any(k in name for k in ["률", "비율", "변별도", "격차", "점수", "배점", "만점", "평균", "최고", "최저", "표준편차", "총점", "환산"]):
-        return True
-    if str(col).endswith("반_정답률") or str(col) == "미상반_정답률":
-        return True
-    series = df[col] if col in df.columns else pd.Series(dtype=object)
-    if pd.api.types.is_numeric_dtype(series):
-        return True
-    non_empty = series.dropna().astype(str).map(str.strip)
-    non_empty = non_empty[non_empty != ""]
-    if non_empty.empty:
-        return False
-    # 난이도, 성취수준처럼 짧은 단답형 텍스트가 들어 있는 열은 가운데 정렬한다.
-    return bool(non_empty.map(len).max() <= 12 and non_empty.map(len).mean() <= 8)
-
-
-def apply_table_display_style(
-    df: pd.DataFrame,
-    highlight_cols: Optional[set] = None,
-    highlight_style: str = "background-color: #fff3cd; font-weight: 700;",
-) -> pd.io.formats.style.Styler:
-    """기존 셀 색상은 유지하면서 헤더와 짧은 값/숫자 셀의 정렬만 보정한다."""
-    styles = pd.DataFrame("", index=df.index, columns=df.columns)
-    highlight_cols = highlight_cols or set()
-    normalized_highlight = {_normalize_display_col_name(c) for c in highlight_cols} | {str(c).strip() for c in highlight_cols}
-
-    for col in df.columns:
-        name = _normalize_display_col_name(col)
-        style_parts = []
-        if name in normalized_highlight or str(col).strip() in normalized_highlight:
-            style_parts.append(highlight_style)
-        if is_center_align_display_column(df, col):
-            style_parts.append("text-align: center;")
-        if style_parts:
-            styles[col] = " ".join(style_parts)
-
-    return (
-        df.style
-        .apply(lambda _: styles, axis=None)
-        .set_table_styles([
-            {"selector": "th", "props": [("text-align", "center"), ("vertical-align", "middle")]},
-            {"selector": "td", "props": [("vertical-align", "middle")]},
-        ])
-    )
-
-
 def style_class_item_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """학급별 문항 분석에서 전체 정답률, 변별도, 학급간최대차 세 열만 같은 색으로 강조한다."""
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
     highlight_cols = {"정답률", "정답률(%)", "변별도", "변별도(%)", "학급간최대차", "학급간최대차(%)", "학급간 최대차", "학급간 최대차(%)"}
-    return apply_table_display_style(df, highlight_cols)
+    for col in df.columns:
+        name = str(col).strip()
+        if name in highlight_cols:
+            styles[col] = "background-color: #fff3cd; font-weight: 700;"
+    return df.style.apply(lambda _: styles, axis=None)
+
+
 
 
 def style_domain_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """평가영역별 분석에서 정답률 열만 같은 색으로 강조한다."""
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
     highlight_cols = {"정답률", "정답률(%)", "영역정답률", "영역정답률(%)"}
-    return apply_table_display_style(df, highlight_cols)
+    for col in df.columns:
+        name = str(col).strip()
+        if name in highlight_cols:
+            styles[col] = "background-color: #fff3cd; font-weight: 700;"
+    return df.style.apply(lambda _: styles, axis=None)
 
 
 def style_standard_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """성취기준별 분석에서 성취기준과 정답률 열을 같은 색으로 강조한다."""
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
     highlight_cols = {"성취기준", "정답률", "정답률(%)", "성취기준정답률", "성취기준정답률(%)"}
-    return apply_table_display_style(df, highlight_cols)
+    for col in df.columns:
+        name = str(col).strip()
+        if name in highlight_cols:
+            styles[col] = "background-color: #fff3cd; font-weight: 700;"
+    return df.style.apply(lambda _: styles, axis=None)
 
 
 def style_level_item_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """성취수준별 문항 분석에서 수준간격차 열을 강조한다."""
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
     highlight_cols = {"수준간격차", "수준간격차(%)", "수준 간 격차", "수준 간 격차(%)"}
-    return apply_table_display_style(df, highlight_cols)
+    for col in df.columns:
+        name = str(col).strip()
+        if name in highlight_cols:
+            styles[col] = "background-color: #fff3cd; font-weight: 700;"
+    return df.style.apply(lambda _: styles, axis=None)
 
 
 def style_individual_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """학생 개별 요약표에서 영역총점과 성취수준 열을 같은 색으로 강조한다."""
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
     highlight_cols = {"영역총점", "영역총점(점)", "성취수준"}
-    return apply_table_display_style(df, highlight_cols)
-
+    for col in df.columns:
+        name = str(col).strip()
+        if name in highlight_cols:
+            styles[col] = "background-color: #fff3cd; font-weight: 700;"
+    return df.style.apply(lambda _: styles, axis=None)
 
 def style_item_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """문항별 분석에서 평가영역, 전체 정답률, 변별도 세 열만 같은 색으로 강조한다."""
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
     highlight_cols = {"평가영역", "★ 평가요소", "정답률", "정답률(%)", "전체 정답률", "전체 정답률(%)", "변별도", "변별도(%)"}
-    return apply_table_display_style(df, highlight_cols)
-
-
-def style_plain_display_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
-    """색칠 없는 일반 표에도 헤더와 짧은 값/숫자 셀 정렬을 적용한다."""
-    return apply_table_display_style(df)
+    for col in df.columns:
+        name = str(col).strip()
+        if name in highlight_cols:
+            styles[col] = "background-color: #fff3cd; font-weight: 700;"
+    return df.style.apply(lambda _: styles, axis=None)
 
 
 def fmt_percent_df(df: pd.DataFrame, digits: int = 1) -> pd.DataFrame:
@@ -2591,14 +2546,14 @@ def main() -> None:
                     }
                     for v in st.session_state.answer_file_store.values()
                 ])
-                st.dataframe(style_plain_display_df(file_view), use_container_width=True, hide_index=True)
+                st.dataframe(file_view, use_container_width=True, hide_index=True)
             if added_files:
                 st.success(f"정오표 {len(added_files)}개를 추가했습니다: " + ", ".join(added_files))
             if duplicate_files:
                 st.info(f"이미 등록된 정오표 {len(duplicate_files)}개는 중복 제외했습니다: " + ", ".join(duplicate_files))
             if failed_files:
                 st.warning(f"정오표 {len(failed_files)}개는 읽지 못해 제외했습니다.")
-                st.dataframe(style_plain_display_df(pd.DataFrame(failed_files)), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(failed_files), use_container_width=True, hide_index=True)
             if st.button("정오표 목록 초기화"):
                 st.session_state.answer_file_store = {}
                 st.rerun()
@@ -3024,13 +2979,13 @@ def main() -> None:
     if selected_analysis_tab == "데이터 확인":
         with st.container(border=True):
             st.markdown("#### 문항정보")
-            st.dataframe(style_plain_display_df(parsed.question_df), use_container_width=True, height=260)
+            st.dataframe(parsed.question_df, use_container_width=True, height=260)
         with st.container(border=True):
             st.markdown("#### 학생 정오표")
-            st.dataframe(style_plain_display_df(parsed.students_df), use_container_width=True, height=260)
+            st.dataframe(parsed.students_df, use_container_width=True, height=260)
         with st.container(border=True):
             st.markdown("#### 검증결과")
-            st.dataframe(style_plain_display_df(parsed.validation_df), use_container_width=True, height=220)
+            st.dataframe(parsed.validation_df, use_container_width=True, height=220)
 
     elif selected_analysis_tab == "성취도 분석":
         alpha = analysis.get("alpha")
@@ -3040,7 +2995,7 @@ def main() -> None:
             a2.metric("표준편차", f"{analysis['achievement'].loc[0, '표준편차']:.2f}")
             a3.metric("최고/최저(점)", f"{analysis['achievement'].loc[0, '최고점']:.1f} / {analysis['achievement'].loc[0, '최저점']:.1f}")
             a4.metric("검사신뢰도 α", "-" if alpha is None else f"{alpha:.3f}")
-            st.dataframe(style_plain_display_df(fmt_percent_df(analysis["achievement"])), use_container_width=True)
+            st.dataframe(fmt_percent_df(analysis["achievement"]), use_container_width=True)
 
             achievement_std = safe_float(analysis["achievement"].loc[0, "표준편차"], 0.0)
             std_ratio = (achievement_std / total_full_score * 100) if total_full_score else 0.0
@@ -3231,7 +3186,7 @@ def main() -> None:
                 st.markdown("##### 전체 성취수준별 비율")
                 total_level_chart_df = make_total_level_distribution_chart_df(analysis["individual"])
                 if not total_level_chart_df.empty:
-                    st.dataframe(style_plain_display_df(fmt_percent_df(total_level_chart_df)), use_container_width=True, hide_index=True)
+                    st.dataframe(fmt_percent_df(total_level_chart_df), use_container_width=True, hide_index=True)
                 else:
                     st.info("표시할 전체 성취수준 데이터가 없습니다.")
 
@@ -3340,7 +3295,7 @@ def main() -> None:
                         comparison_table = chart_data[["성취수준", "학생수(명)", "비율", "전체학생수(명)", "전체비율"]].rename(
                             columns={"학생수(명)": "선택반학생수(명)", "비율": "선택반비율"}
                         )
-                        st.dataframe(style_plain_display_df(fmt_percent_df(comparison_table)), use_container_width=True, hide_index=True)
+                        st.dataframe(fmt_percent_df(comparison_table), use_container_width=True, hide_index=True)
                     else:
                         st.info("선택한 반의 성취수준 데이터가 없습니다.")
                 else:
@@ -3348,7 +3303,7 @@ def main() -> None:
     
         with st.container(border=True):
             st.markdown("#### 학급별 성취도")
-            st.dataframe(style_plain_display_df(fmt_percent_df(analysis["class_achievement"])), use_container_width=True)
+            st.dataframe(fmt_percent_df(analysis["class_achievement"]), use_container_width=True)
 
     elif selected_analysis_tab == "문항별 분석":
         with st.container(border=True):
@@ -3489,7 +3444,7 @@ def main() -> None:
         if "차이해석" in display_gap.columns:
             display_gap = display_gap.rename(columns={"차이해석": "판정"})
         with st.container(border=True):
-            st.dataframe(style_plain_display_df(display_gap), use_container_width=True, height=760, hide_index=True)
+            st.dataframe(display_gap, use_container_width=True, height=760, hide_index=True)
 
     elif selected_analysis_tab == "학급별 분석":
         with st.container(border=True):
@@ -3533,7 +3488,7 @@ def main() -> None:
                     })
             gap_df = pd.DataFrame(gap_rows)
             if not gap_df.empty:
-                st.dataframe(style_plain_display_df(fmt_percent_df(gap_df.sort_values("학급간차이", ascending=False))), use_container_width=True, height=360, hide_index=True)
+                st.dataframe(fmt_percent_df(gap_df.sort_values("학급간차이", ascending=False)), use_container_width=True, height=360, hide_index=True)
             else:
                 st.info("학급 간 정답률 차이를 계산할 데이터가 없습니다.")
 
@@ -3619,7 +3574,7 @@ def main() -> None:
             student_options = analysis["individual"].sort_values(["반", "번호"])["반/번호"].tolist()
             selected_student = st.selectbox("학생 선택", student_options)
             one_long = analysis["long"][analysis["long"]["반/번호"] == selected_student]
-            st.dataframe(style_plain_display_df(fmt_percent_df(one_long[["문항번호", "평가영역", "난이도", "배점", "정답", "원본표시", "선택지", "정오", "점수", "성취기준"]])), use_container_width=True, height=360)
+            st.dataframe(fmt_percent_df(one_long[["문항번호", "평가영역", "난이도", "배점", "정답", "원본표시", "선택지", "정오", "점수", "성취기준"]]), use_container_width=True, height=360)
 
     elif selected_analysis_tab == "AI 분석":
         with st.container(border=True):
