@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.49
+성취수준별 평가결과 분석 웹앱 v1.50
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -52,6 +52,7 @@
 - v1.47: 문항정보 수정 단계의 평가요소 하이라이트 확인용 표 제거
 - v1.48: 수정된 문항정보 요약을 성취기준별 평가요소·난이도·총점 구조로 재정리
 - v1.49: 수정된 문항정보 요약과 성취기준-평가요소별 상세 구성 표를 줄바꿈형 표로 표시해 긴 셀 내용을 읽기 쉽게 개선
+- v1.50: 수정된 문항정보 요약을 표 대신 성취기준별 카드형 목록으로 재구성
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -84,7 +85,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.49"
+APP_VERSION = "v1.50"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2016,7 +2017,7 @@ def main() -> None:
     parsed.validation_df = make_validation(parsed.question_df, parsed.answer_key_df)
 
     with st.expander("수정된 문항정보 요약", expanded=False):
-        st.caption("성취기준별로 어떤 평가요소가 포함되어 있는지, 각 평가요소의 난이도와 배점이 어떻게 배치되어 있는지 확인할 수 있습니다. 평가요소를 수정한 뒤 이 표를 보며 특정 성취기준 안에서 평가 내용이 충분히 구체적으로 구분되는지 점검하세요.")
+        st.caption("성취기준별로 평가요소, 난이도 배치, 문항 구성, 총점을 카드형으로 확인할 수 있습니다. 평가요소를 수정한 뒤 각 성취기준 안에서 문항의 평가 내용이 충분히 구체적으로 구분되는지 점검하세요.")
 
         q_summary = parsed.question_df.copy()
         q_summary["성취기준"] = q_summary.get("성취기준", "").fillna("").astype(str).str.strip().replace("", "미입력")
@@ -2025,49 +2026,155 @@ def main() -> None:
         q_summary["배점"] = pd.to_numeric(q_summary.get("배점", 0), errors="coerce").fillna(0.0)
         q_summary["문항번호"] = pd.to_numeric(q_summary.get("문항번호", 0), errors="coerce").fillna(0).astype(int)
 
-        def join_unique_text(values: pd.Series) -> str:
-            items = []
+        def unique_text_list(values: pd.Series) -> List[str]:
+            items: List[str] = []
             for value in values:
                 text = str(value).strip()
                 if text and text not in items:
                     items.append(text)
-            return " / ".join(items)
+            return items
 
-        def difficulty_layout(group: pd.DataFrame) -> str:
+        def difficulty_parts(group: pd.DataFrame) -> List[str]:
             order = ["어려움", "보통", "쉬움", "미입력"]
-            parts = []
+            parts: List[str] = []
             for diff in order:
                 sub = group[group["난이도"] == diff]
                 if not sub.empty:
-                    parts.append(f"{diff} {len(sub)}문항/{sub['배점'].sum():.1f}점")
-            return " · ".join(parts)
+                    parts.append(f"{diff} {len(sub)}문항 / {sub['배점'].sum():.1f}점")
+            return parts
 
-        def item_layout(group: pd.DataFrame) -> str:
-            rows = []
+        def item_lines(group: pd.DataFrame) -> List[str]:
+            rows: List[str] = []
             for _, row in group.sort_values("문항번호").iterrows():
-                rows.append(f"{int(row['문항번호'])}번({row['평가영역']} · {row['난이도']} · {row['배점']:.1f}점)")
-            return " / ".join(rows)
+                rows.append(f"{int(row['문항번호'])}번 · {row['난이도']} · {row['배점']:.1f}점 · {row['평가영역']}")
+            return rows
 
-        standard_summary_rows = []
-        for standard, group in q_summary.groupby("성취기준", dropna=False, sort=False):
-            standard_summary_rows.append({
-                "성취기준": standard,
-                "성취기준총점": group["배점"].sum(),
-                "문항수": len(group),
-                "평가요소": join_unique_text(group["평가영역"]),
-                "난이도 배치": difficulty_layout(group),
-                "문항별 구성": item_layout(group),
-            })
-        standard_summary_df = pd.DataFrame(standard_summary_rows)
-        render_wrapped_table(format_output_df(standard_summary_df), key="standard-summary-wrap-table")
+        def render_standard_card(standard: str, group: pd.DataFrame, idx: int) -> None:
+            total_score = group["배점"].sum()
+            item_count = len(group)
+            eval_items = unique_text_list(group["평가영역"])
+            diff_items = difficulty_parts(group)
+            question_items = item_lines(group)
 
-        with st.expander("성취기준-평가요소별 상세 구성", expanded=False):
-            detail_df = q_summary.groupby(["성취기준", "평가영역", "난이도"], dropna=False, sort=False).agg(
-                문항수=("문항번호", "count"),
-                배점합계=("배점", "sum"),
-                문항번호=("문항번호", lambda x: ", ".join(map(str, sorted([int(v) for v in x if pd.notna(v)])))),
-            ).reset_index()
-            render_wrapped_table(format_output_df(detail_df), key="standard-detail-wrap-table")
+            eval_html = "".join(f"<li>{html.escape(item)}</li>" for item in eval_items) or "<li>미입력</li>"
+            diff_html = "".join(f"<span class='summary-chip'>{html.escape(item)}</span>" for item in diff_items) or "<span class='summary-chip'>미입력</span>"
+            question_html = "".join(f"<li>{html.escape(item)}</li>" for item in question_items) or "<li>미입력</li>"
+
+            card_html = f"""
+            <div class="standard-summary-card">
+                <div class="standard-card-title">성취기준 {idx}</div>
+                <div class="standard-card-standard">{html.escape(str(standard))}</div>
+                <div class="standard-card-metrics">
+                    <div><span>총점</span><strong>{total_score:.1f}점</strong></div>
+                    <div><span>문항수</span><strong>{item_count}문항</strong></div>
+                </div>
+                <div class="standard-card-section">
+                    <div class="standard-card-label">난이도 구성</div>
+                    <div class="summary-chip-wrap">{diff_html}</div>
+                </div>
+                <div class="standard-card-section">
+                    <div class="standard-card-label">평가요소</div>
+                    <ul>{eval_html}</ul>
+                </div>
+                <div class="standard-card-section">
+                    <div class="standard-card-label">문항 구성</div>
+                    <ul>{question_html}</ul>
+                </div>
+            </div>
+            """
+            st.markdown(card_html, unsafe_allow_html=True)
+
+        st.markdown(
+            """
+            <style>
+            .standard-summary-card {
+                border: 1px solid #e5e7eb;
+                border-radius: 14px;
+                padding: 18px 20px;
+                margin: 14px 0;
+                background: #ffffff;
+                box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+            }
+            .standard-card-title {
+                font-size: 0.9rem;
+                font-weight: 700;
+                color: #4b5563;
+                margin-bottom: 6px;
+            }
+            .standard-card-standard {
+                font-size: 1.02rem;
+                font-weight: 700;
+                line-height: 1.5;
+                color: #111827;
+                margin-bottom: 12px;
+                word-break: keep-all;
+                overflow-wrap: anywhere;
+            }
+            .standard-card-metrics {
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
+                margin-bottom: 12px;
+            }
+            .standard-card-metrics div {
+                background: #f9fafb;
+                border: 1px solid #eef0f3;
+                border-radius: 10px;
+                padding: 8px 12px;
+                min-width: 110px;
+            }
+            .standard-card-metrics span {
+                display: block;
+                color: #6b7280;
+                font-size: 0.82rem;
+                margin-bottom: 2px;
+            }
+            .standard-card-metrics strong {
+                color: #111827;
+                font-size: 1rem;
+            }
+            .standard-card-section {
+                margin-top: 12px;
+            }
+            .standard-card-label {
+                font-weight: 700;
+                color: #374151;
+                margin-bottom: 6px;
+            }
+            .standard-summary-card ul {
+                margin: 4px 0 0 1.1rem;
+                padding: 0;
+                line-height: 1.55;
+            }
+            .standard-summary-card li {
+                margin: 3px 0;
+                word-break: keep-all;
+                overflow-wrap: anywhere;
+            }
+            .summary-chip-wrap {
+                display: flex;
+                gap: 6px;
+                flex-wrap: wrap;
+            }
+            .summary-chip {
+                display: inline-block;
+                background: #f3f4f6;
+                border: 1px solid #e5e7eb;
+                border-radius: 999px;
+                padding: 5px 9px;
+                font-size: 0.9rem;
+                color: #374151;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if q_summary.empty:
+            st.info("표시할 문항정보가 없습니다.")
+        else:
+            for idx, (standard, group) in enumerate(q_summary.groupby("성취기준", dropna=False, sort=False), start=1):
+                render_standard_card(str(standard), group, idx)
 
     st.subheader("3. 분석 기준")
     c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
