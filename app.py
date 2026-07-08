@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.82
+성취수준별 평가결과 분석 웹앱 v1.83
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -82,6 +82,7 @@
 - v1.79: 성취기준별 분석 표에서 성취기준과 정답률 열을 강조하고 기본 정렬을 성취기준 오름차순으로 변경
 - v1.80: 성취수준별 문항 분석 탭에서 문항번호 순 정렬, 빈 성취수준 표시 보정, 안내 문구를 추가하여 표가 비어 보이는 문제를 개선
 - v1.82: 화면 표시용 점수 계열 숫자를 모든 탭에서 소수점 첫째 자리까지 표시하도록 통일
+- v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -116,7 +117,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.82"
+APP_VERSION = "v1.83"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1944,6 +1945,17 @@ def style_standard_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     return df.style.apply(lambda _: styles, axis=None)
 
 
+def style_level_item_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    """성취수준별 문항 분석에서 수준간격차 열을 강조한다."""
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+    highlight_cols = {"수준간격차", "수준간격차(%)", "수준 간 격차", "수준 간 격차(%)"}
+    for col in df.columns:
+        name = str(col).strip()
+        if name in highlight_cols:
+            styles[col] = "background-color: #fff3cd; font-weight: 700;"
+    return df.style.apply(lambda _: styles, axis=None)
+
+
 def style_individual_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """학생 개별 요약표에서 영역총점과 성취수준 열을 같은 색으로 강조한다."""
     styles = pd.DataFrame("", index=df.index, columns=df.columns)
@@ -3141,11 +3153,13 @@ def main() -> None:
                 if "문항번호" in level_df.columns:
                     level_df["문항번호"] = pd.to_numeric(level_df["문항번호"], errors="coerce")
                     level_df = level_df.sort_values("문항번호", ascending=True)
+                preferred_level_cols = ["평가영역", "문항번호", "정답률", "A", "B", "C", "D", "E", "수준간격차"]
+                level_df = level_df[[c for c in preferred_level_cols if c in level_df.columns] + [c for c in level_df.columns if c not in preferred_level_cols]]
                 level_display = fmt_percent_df(level_df)
                 for level_col in list("ABCDE"):
                     if level_col in level_display.columns:
                         level_display[level_col] = level_display[level_col].replace("", "-").fillna("-")
-                st.dataframe(level_display, use_container_width=True, height=760, hide_index=True)
+                st.dataframe(style_level_item_analysis_df(level_display), use_container_width=True, height=760, hide_index=True)
 
     elif selected_analysis_tab == "학생 개별":
         with st.container(border=True):
