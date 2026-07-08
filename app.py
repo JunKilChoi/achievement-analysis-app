@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.89
+성취수준별 평가결과 분석 웹앱 v1.90
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -88,6 +88,7 @@
 - v1.87: 원안지 기반 고급 분석 전용 프리셋이 확실히 표시되도록 상태키를 분리하고 프리셋 안내 문구를 보강
 - v1.88: 고급 분석에서 별도의 분석 범위 선택을 제거하고, 원안지 기반 고급 분석 프리셋 중심으로 실행되도록 단순화
 - v1.89: Word AI 분석 보고서의 평가 정보 영역을 공문서형 요약 표와 강조 박스 중심 양식으로 개선
+- v1.90: 나이스 문항정보표가 없는 학교를 위해 앱 전용 문항정보표 양식 다운로드와 업로드 인식 기능 추가
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
@@ -123,7 +124,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.89"
+APP_VERSION = "v1.90"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -342,6 +343,131 @@ def safe_sheet_name(name: str) -> str:
     return name or "Sheet"
 
 
+
+
+def make_question_info_template_xlsx() -> bytes:
+    """나이스 문항정보표가 없는 학교에서 직접 입력해 업로드할 수 있는 간편 양식 생성."""
+    output = io.BytesIO()
+    input_cols = ["문항번호", "평가요소", "성취기준", "난이도", "배점", "정답"]
+    input_df = pd.DataFrame([{c: "" for c in input_cols} for _ in range(40)])
+    guide_df = pd.DataFrame(
+        [
+            ["문항번호", "숫자로 입력합니다. 예: 1, 2, 3"],
+            ["평가요소", "문항이 실제로 평가하는 개념·자료 해석·사고 과정이 드러나도록 구체적으로 입력합니다."],
+            ["성취기준", "문항정보표의 성취기준 또는 교사가 사용하는 성취기준을 입력합니다."],
+            ["난이도", "쉬움, 보통, 어려움 중 하나로 입력합니다."],
+            ["배점", "문항 배점을 숫자로 입력합니다. 예: 2, 2.5"],
+            ["정답", "단일 정답은 1~5, 복수정답은 2,3처럼 쉼표로 입력합니다."],
+            ["업로드", "이 파일을 작성한 뒤 앱의 문항정보표 업로드에 그대로 올리면 나이스 문항정보표처럼 인식됩니다."],
+        ],
+        columns=["항목", "작성 방법"],
+    )
+    example_df = pd.DataFrame(
+        [
+            [1, "자료를 바탕으로 물질의 특성 판단하기", "[9과08-01] 물질의 특성의 의미를 알고, 실험을 통해 밀도, 용해도, 녹는점, 끓는점 등을 설명할 수 있다.", "쉬움", 2.0, "4"],
+            [2, "그래프 자료에서 용해도 변화 해석하기", "[9과08-01] 물질의 특성의 의미를 알고, 실험을 통해 밀도, 용해도, 녹는점, 끓는점 등을 설명할 수 있다.", "보통", 2.0, "2,3"],
+        ],
+        columns=input_cols,
+    )
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        input_df.to_excel(writer, index=False, sheet_name="문항정보입력", startrow=4)
+        guide_df.to_excel(writer, index=False, sheet_name="작성안내")
+        example_df.to_excel(writer, index=False, sheet_name="작성예시")
+
+        wb = writer.book
+        title_fmt = wb.add_format({"bold": True, "font_size": 15, "font_color": "#1F2937"})
+        desc_fmt = wb.add_format({"text_wrap": True, "font_color": "#4B5563"})
+        header_fmt = wb.add_format({"bold": True, "bg_color": "#E8F0FE", "border": 1, "align": "center", "valign": "vcenter"})
+        input_fmt = wb.add_format({"border": 1, "valign": "top", "text_wrap": True})
+        note_fmt = wb.add_format({"bg_color": "#F8FAFC", "border": 1, "text_wrap": True, "valign": "top"})
+
+        ws = writer.sheets["문항정보입력"]
+        ws.write(0, 0, "성취수준별 평가결과 분석 웹앱 문항정보표 입력 양식", title_fmt)
+        ws.write(1, 0, "나이스 문항정보표를 사용하지 않는 경우 이 양식에 문항정보를 입력한 뒤, 앱의 문항정보표 업로드에 그대로 올려 주세요.", desc_fmt)
+        ws.write(2, 0, "필수 입력 열: 문항번호, 평가요소, 성취기준, 난이도, 배점, 정답 / 복수정답은 2,3처럼 입력합니다.", desc_fmt)
+        for col, value in enumerate(input_cols):
+            ws.write(4, col, value, header_fmt)
+        widths = [10, 36, 64, 12, 10, 14]
+        for col, width in enumerate(widths):
+            ws.set_column(col, col, width, input_fmt)
+        ws.freeze_panes(5, 0)
+        ws.data_validation(5, 3, 44, 3, {"validate": "list", "source": ["쉬움", "보통", "어려움"]})
+
+        for sheet_name in ["작성안내", "작성예시"]:
+            gws = writer.sheets[sheet_name]
+            df = guide_df if sheet_name == "작성안내" else example_df
+            for col, value in enumerate(df.columns):
+                gws.write(0, col, value, header_fmt)
+            for col in range(len(df.columns)):
+                gws.set_column(col, col, 24 if col == 0 else 80, note_fmt)
+            gws.freeze_panes(1, 0)
+    return output.getvalue()
+
+
+def try_parse_app_question_template(rows: List[List[Any]]) -> Optional[Tuple[Dict[str, Any], pd.DataFrame]]:
+    """앱 전용 문항정보표 양식 업로드를 감지해 문항정보 DataFrame으로 변환한다."""
+    required = {"문항번호", "배점", "정답"}
+    header_idx = None
+    header_map: Dict[str, int] = {}
+    for i, row in enumerate(rows[:30]):
+        cells = [clean_text(c).replace(" ", "") for c in row]
+        names = set(cells)
+        has_domain = any(x in names for x in ["평가요소", "평가영역"])
+        if required.issubset(names) and has_domain:
+            header_idx = i
+            for j, c in enumerate(cells):
+                if c:
+                    header_map[c] = j
+            break
+    if header_idx is None:
+        return None
+
+    def cell(row: List[Any], *names: str) -> Any:
+        for name in names:
+            key = name.replace(" ", "")
+            if key in header_map:
+                idx = header_map[key]
+                return row[idx] if len(row) > idx else None
+        return None
+
+    items: List[Dict[str, Any]] = []
+    for row in rows[header_idx + 1:]:
+        q_raw = cell(row, "문항번호")
+        if not is_question_no(q_raw):
+            if not any(clean_text(c) for c in row):
+                continue
+            continue
+        qno = int(to_number(q_raw) or 0)
+        domain = clean_text(cell(row, "평가요소", "평가영역"))
+        standard = clean_text(cell(row, "성취기준"))
+        difficulty = clean_text(cell(row, "난이도"))
+        if difficulty not in ["쉬움", "보통", "어려움"]:
+            difficulty = difficulty or "보통"
+        items.append(
+            {
+                "문항번호": qno,
+                "평가영역": domain,
+                "성취기준": standard,
+                "난이도": difficulty,
+                "배점": to_number(cell(row, "배점")),
+                "정답": normalize_choice_answer_value(cell(row, "정답")),
+            }
+        )
+    if not items:
+        raise ValueError("앱 전용 문항정보표 양식에서 입력된 문항을 찾지 못했습니다.")
+    qdf = pd.DataFrame(items).drop_duplicates(subset=["문항번호"], keep="first")
+    qdf = qdf.sort_values("문항번호").reset_index(drop=True)
+    exam_info: Dict[str, Any] = {
+        "문항정보표양식": "앱 전용 간편 양식",
+        "선택형문항수": int(qdf["문항번호"].max()),
+        "선택형만점": float(pd.to_numeric(qdf["배점"], errors="coerce").fillna(0).sum()),
+        "서답형문항수": 0,
+        "서답형만점": 0.0,
+    }
+    exam_info["과목만점"] = exam_info["선택형만점"] + exam_info["서답형만점"]
+    return exam_info, qdf
+
+
 # -----------------------------------------------------------------------------
 # 나이스 원본 파서
 # -----------------------------------------------------------------------------
@@ -358,6 +484,9 @@ def read_workbook_rows(uploaded_file: Any) -> List[List[Any]]:
 
 def parse_question_info(uploaded_file: Any) -> Tuple[Dict[str, Any], pd.DataFrame]:
     rows = read_workbook_rows(uploaded_file)
+    app_template_result = try_parse_app_question_template(rows)
+    if app_template_result is not None:
+        return app_template_result
     subject = extract_subject_from_question_sheet(rows)
     all_text = " ".join(clean_text(c) for row in rows[:10] for c in row if clean_text(c))
     exam_info = parse_exam_info_from_text(all_text)
@@ -2362,6 +2491,15 @@ def main() -> None:
     left, right = st.columns(2)
     with left:
         question_file = st.file_uploader("문항정보표 업로드", type=["xlsx"], key="question_file")
+        st.download_button(
+            "문항정보표 양식 다운하기",
+            make_question_info_template_xlsx(),
+            file_name="문항정보표_입력양식.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            help="나이스 문항정보표를 사용하지 않는 학교는 이 양식을 내려받아 문항번호, 평가요소, 성취기준, 난이도, 배점, 정답을 입력한 뒤 문항정보표 업로드에 다시 올리면 됩니다.",
+        )
+        st.caption("나이스 문항정보표가 없는 경우 위 양식을 내려받아 작성한 뒤, 같은 문항정보표 업로드 칸에 올리면 나이스 문항정보표처럼 인식됩니다.")
     with right:
         uploaded_answer_files = st.file_uploader(
             "학생답 정오표 업로드",
