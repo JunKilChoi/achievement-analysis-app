@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.60
+성취수준별 평가결과 분석 웹앱 v1.61
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -62,6 +62,7 @@
 - v1.57: 문항정보 수정 영역의 문항정보 수정값 적용, 문항 추가, 선택 문항 삭제 버튼을 한 줄에 나란히 배치
 - v1.59: 평가정보 자동 인식값 수정 영역을 즉시 반영 방식에서 적용 버튼 방식으로 변경
 - v1.60: 1~4단계 대분류를 시각적으로 더 뚜렷하게 구분하는 단계형 헤더와 설명 문구 추가
+- v1.61: 1~4단계 사이에 은은하지만 명확한 가로 구분선을 추가하여 단계 전환을 시각적으로 분리
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
@@ -95,7 +96,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.60"
+APP_VERSION = "v1.61"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1934,9 +1935,11 @@ def main() -> None:
             line-height: 1.45;
         }
         .big-section-gap {
-            height: 10px;
-            border-top: 1px dashed #d1d5db;
-            margin: 28px 0 8px 0;
+            height: 22px;
+            margin: 36px 0 20px 0;
+            border: 0;
+            border-top: 2px solid rgba(75, 85, 99, 0.36);
+            box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.9) inset;
         }
         </style>
         """,
@@ -2156,6 +2159,7 @@ def main() -> None:
     auto_info_values = {**default_auto_info_values(), **st.session_state.get(auto_info_state_key, {})}
     parsed.exam_info.update(auto_info_values)
 
+    st.markdown("<div class='big-section-gap'></div>", unsafe_allow_html=True)
     render_step_header("2", "문항정보 수정", "문항별 평가요소, 성취기준, 난이도, 배점, 정답을 실제 분석 목적에 맞게 보정합니다.")
     st.caption("나이스 문항정보표에서 자동 인식한 값입니다. 평가 후 분석 자료를 더 구체화하려면 평가영역, 성취기준, 난이도 등을 여기서 수정하세요. 수정한 값은 아래 분석 결과, 확인용 엑셀, 5종 분석 엑셀, AI 분석에 모두 반영됩니다.")
 
@@ -2407,6 +2411,7 @@ def main() -> None:
             for idx, (standard, group) in enumerate(q_summary.groupby("성취기준", dropna=False, sort=False), start=1):
                 render_standard_card(str(standard), group, idx)
 
+    st.markdown("<div class='big-section-gap'></div>", unsafe_allow_html=True)
     render_step_header("3", "분석 기준 및 결과 확인", "성취수준 분할점수를 설정한 뒤, 탭별 분석 결과와 AI 분석을 확인합니다.")
     st.caption("선택형 만점, 서답형 만점, 과목 만점은 1. 자동 인식 결과의 '평가정보 자동 인식값 수정'에서 조정할 수 있습니다.")
     parsed.exam_info["선택형만점"] = safe_float(parsed.exam_info.get("선택형만점"), safe_float(parsed.question_df["배점"].fillna(0).sum() if "배점" in parsed.question_df.columns else 0.0, 0.0))
