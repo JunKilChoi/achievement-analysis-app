@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.85
+성취수준별 평가결과 분석 웹앱 v1.86
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -84,6 +84,7 @@
 - v1.82: 화면 표시용 점수 계열 숫자를 모든 탭에서 소수점 첫째 자리까지 표시하도록 통일
 - v1.84: AI 분석의 전체 분석, 학생 개별 분석, 원안지 기반 고급 분석에 분석 요청 프리셋 드롭박스 추가
 - v1.85: 학생 개별 분석 프리셋 중 맞춤형 피드백과 다음 시험 학습 전략 조언에 과목 특성을 고려한 학습 방식 개선 중심 안내 반영
+- v1.86: AI 분석 내부의 기본/고급 분석 전환을 탭에서 선택형 메뉴로 변경하여 기본 분석 선택 시 고급 분석 영역이 함께 펼쳐지는 현상 수정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
@@ -119,7 +120,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.85"
+APP_VERSION = "v1.86"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -3256,9 +3257,14 @@ def main() -> None:
             api_key = st.text_input("OpenAI API Key", type="password")
             model = st.text_input("모델", value="gpt-4o-mini")
 
-        ai_tab_basic, ai_tab_advanced = st.tabs(["기본 분석: 통계 기반 해석", "고급 분석: 원안지 기반 심층 해석"])
+        ai_section_mode = st.radio(
+            "AI 분석 종류",
+            ["기본 분석: 통계 기반 해석", "고급 분석: 원안지 기반 심층 해석"],
+            horizontal=True,
+            key="ai_section_mode",
+        )
 
-        with ai_tab_basic:
+        if ai_section_mode == "기본 분석: 통계 기반 해석":
             with st.container(border=True):
                 st.markdown("#### 기본 분석: 통계 기반 해석")
                 st.markdown("원안지 PDF 없이 현재 분석 데이터만으로 전체 경향, 취약 영역, 문항별 이상 신호, 학생 개별 피드백을 생성합니다. 결과는 평가 정보가 포함된 Word 문서로 저장할 수 있습니다.")
@@ -3368,7 +3374,7 @@ def main() -> None:
                         key="download_basic_ai_docx_persisted",
                     )
 
-        with ai_tab_advanced:
+        elif ai_section_mode == "고급 분석: 원안지 기반 심층 해석":
             with st.container(border=True):
                 st.markdown("#### 고급 분석: 원안지 기반 심층 해석")
                 st.markdown("원안지 PDF를 업로드한 뒤, 분석 유형과 문항 범위를 정해 문항 내용 기반 심층 분석을 생성합니다.")
