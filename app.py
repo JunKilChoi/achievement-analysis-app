@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.63
+성취수준별 평가결과 분석 웹앱 v1.64
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -65,6 +65,7 @@
 - v1.61: 1~4단계 사이에 은은하지만 명확한 가로 구분선을 추가하여 단계 전환을 시각적으로 분리
 - v1.62: 성취도 분석 표 아래에 표준편차의 의미와 만점 대비 표준편차 비율 기준 해석 안내 문구 추가
 - v1.63: 성취도 분석의 표준편차 해석 안내를 다른 부연 설명과 비슷한 간결한 안내 박스 형태로 조정
+- v1.64: 성취도 분석 탭에서 전체 분석 그래프와 개별 반 분석 그래프를 각각 카드형 영역으로 분리하고, 전체/개별 반 성취수준별 비율 표를 그래프 아래에 나란히 표시
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
@@ -98,7 +99,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.63"
+APP_VERSION = "v1.64"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -665,6 +666,21 @@ def make_class_score_distribution_chart_data(individual_df: pd.DataFrame, class_
         y_max = max(y_max, float(pd.to_numeric(summary["최고점"], errors="coerce").max() or y_max))
     return pd.DataFrame(dist_rows), summary, label_expr, y_max
 
+
+
+
+def make_total_level_distribution_chart_df(individual_df: pd.DataFrame) -> pd.DataFrame:
+    df = individual_df.copy()
+    if df.empty or "성취수준" not in df.columns:
+        return pd.DataFrame()
+    levels = list("ABCDE")
+    counts = df["성취수준"].value_counts().reindex(levels, fill_value=0)
+    total = int(counts.sum())
+    return pd.DataFrame({
+        "성취수준": levels,
+        "학생수(명)": counts.astype(int).values,
+        "비율": [(count / total) if total else 0 for count in counts.values],
+    })
 
 def make_class_level_distribution_chart_df(individual_df: pd.DataFrame, selected_class: Any) -> pd.DataFrame:
     df = individual_df[individual_df["반"].astype(str) == str(selected_class)].copy()
@@ -2473,230 +2489,239 @@ def main() -> None:
         graph_col1, graph_col2 = st.columns(2)
 
         with graph_col1:
-            st.markdown("#### 전체 분석 그래프")
-            dist_chart_df, summary_chart_df, class_label_expr, chart_y_max = make_class_score_distribution_chart_data(
-                analysis["individual"], analysis["class_achievement"], full_score=total_full_score, bin_size=5
-            )
-            if not summary_chart_df.empty:
-                dist_for_chart = dist_chart_df.copy()
-                summary_for_chart = summary_chart_df.copy()
-                dist_for_chart["그래프요소"] = "분포"
-                summary_for_chart["그래프요소"] = "요약"
-                chart_source_df = pd.concat([dist_for_chart, summary_for_chart], ignore_index=True, sort=False)
-
-                st.vega_lite_chart(
-                    chart_source_df,
-                    {
-                        "height": 390,
-                        "width": "container",
-                        "resolve": {"scale": {"x": "shared", "y": "shared"}},
-                        "config": {
-                            "axis": {"labelFontSize": 12, "titleFontSize": 13, "grid": True},
-                            "view": {"stroke": "transparent"},
-                        },
-                        "layer": [
-                            {
-                                "transform": [{"filter": "datum.그래프요소 == '분포'"}],
-                                "mark": {
-                                    "type": "rect",
-                                    "cornerRadius": 2,
-                                    "color": "#94A3B8",
-                                    "opacity": 0.8,
-                                },
-                                "encoding": {
-                                    "x": {
-                                        "field": "왼쪽폭",
-                                        "type": "quantitative",
-                                        "axis": {
-                                            "title": "학급",
-                                            "labelAngle": 0,
-                                            "values": summary_chart_df["학급위치"].astype(int).tolist(),
-                                            "labelExpr": class_label_expr,
-                                        },
-                                    },
-                                    "x2": {"field": "오른쪽폭"},
-                                    "y": {
-                                        "field": "점수구간하한",
-                                        "type": "quantitative",
-                                        "axis": {"title": "점수"},
-                                        "scale": {"domain": [0, chart_y_max]},
-                                    },
-                                    "y2": {"field": "점수구간상한"},
-                                    "tooltip": [
-                                        {"field": "학급", "type": "nominal", "title": "학급"},
-                                        {"field": "점수구간", "type": "nominal", "title": "점수 구간"},
-                                        {"field": "도수(명)", "type": "quantitative", "title": "도수(명)"},
-                                    ],
-                                },
-                            },
-                            {
-                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
-                                "mark": {
-                                    "type": "rule",
-                                    "strokeWidth": 5,
-                                    "color": "#111827",
-                                    "opacity": 0.95,
-                                },
-                                "encoding": {
-                                    "x": {"field": "학급위치", "type": "quantitative"},
-                                    "y": {"field": "최저점", "type": "quantitative"},
-                                    "y2": {"field": "최고점"},
-                                    "tooltip": [
-                                        {"field": "학급", "type": "nominal", "title": "학급"},
-                                        {"field": "최고점", "type": "quantitative", "format": ".1f", "title": "최고점"},
-                                        {"field": "평균", "type": "quantitative", "format": ".1f", "title": "평균"},
-                                        {"field": "최저점", "type": "quantitative", "format": ".1f", "title": "최저점"},
-                                    ],
-                                },
-                            },
-                            {
-                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
-                                "mark": {"type": "tick", "thickness": 4, "size": 36, "color": "#111827"},
-                                "encoding": {
-                                    "x": {"field": "학급위치", "type": "quantitative"},
-                                    "y": {"field": "최고점", "type": "quantitative"},
-                                },
-                            },
-                            {
-                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
-                                "mark": {"type": "tick", "thickness": 4, "size": 36, "color": "#111827"},
-                                "encoding": {
-                                    "x": {"field": "학급위치", "type": "quantitative"},
-                                    "y": {"field": "최저점", "type": "quantitative"},
-                                },
-                            },
-                            {
-                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
-                                "mark": {
-                                    "type": "text",
-                                    "align": "left",
-                                    "baseline": "middle",
-                                    "dx": 10,
-                                    "fontSize": 11,
-                                    "fontWeight": "bold",
-                                    "color": "#111827",
-                                },
-                                "encoding": {
-                                    "x": {"field": "학급위치", "type": "quantitative"},
-                                    "y": {"field": "최고점", "type": "quantitative"},
-                                    "text": {"field": "최고라벨", "type": "nominal"},
-                                },
-                            },
-                            {
-                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
-                                "mark": {
-                                    "type": "text",
-                                    "align": "left",
-                                    "baseline": "middle",
-                                    "dx": 10,
-                                    "fontSize": 11,
-                                    "fontWeight": "bold",
-                                    "color": "#111827",
-                                },
-                                "encoding": {
-                                    "x": {"field": "학급위치", "type": "quantitative"},
-                                    "y": {"field": "최저점", "type": "quantitative"},
-                                    "text": {"field": "최저라벨", "type": "nominal"},
-                                },
-                            },
-                            {
-                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
-                                "mark": {
-                                    "type": "point",
-                                    "filled": True,
-                                    "shape": "diamond",
-                                    "size": 260,
-                                    "color": "#E11D48",
-                                    "stroke": "white",
-                                    "strokeWidth": 2.5,
-                                },
-                                "encoding": {
-                                    "x": {"field": "학급위치", "type": "quantitative"},
-                                    "y": {"field": "평균", "type": "quantitative"},
-                                    "tooltip": [
-                                        {"field": "학급", "type": "nominal", "title": "학급"},
-                                        {"field": "평균", "type": "quantitative", "format": ".1f", "title": "평균"},
-                                    ],
-                                },
-                            },
-                            {
-                                "transform": [{"filter": "datum.그래프요소 == '요약'"}],
-                                "mark": {
-                                    "type": "text",
-                                    "align": "left",
-                                    "baseline": "middle",
-                                    "dx": 12,
-                                    "dy": -1,
-                                    "fontSize": 12,
-                                    "fontWeight": "bold",
-                                    "color": "#E11D48",
-                                },
-                                "encoding": {
-                                    "x": {"field": "학급위치", "type": "quantitative"},
-                                    "y": {"field": "평균", "type": "quantitative"},
-                                    "text": {"field": "평균라벨", "type": "nominal"},
-                                },
-                            },
-                        ],
-                    },
-                    use_container_width=True,
+            with st.container(border=True):
+                st.markdown("#### 전체 분석 그래프")
+                dist_chart_df, summary_chart_df, class_label_expr, chart_y_max = make_class_score_distribution_chart_data(
+                    analysis["individual"], analysis["class_achievement"], full_score=total_full_score, bin_size=5
                 )
-            else:
-                st.info("표시할 학급별 점수 데이터가 없습니다.")
-
-        with graph_col2:
-            st.markdown("#### 개별 반 분석 그래프")
-            class_values = sorted(analysis["individual"]["반"].dropna().unique().tolist())
-            if class_values:
-                selected_class_for_graph = st.selectbox(
-                    "분석할 반 선택",
-                    class_values,
-                    format_func=lambda x: f"{int(x)}반" if pd.notna(x) and float(x).is_integer() else f"{x}반",
-                    key="achievement_class_graph_select",
-                )
-                class_level_chart_df = make_class_level_distribution_chart_df(analysis["individual"], selected_class_for_graph)
-                if not class_level_chart_df.empty:
-                    chart_data = class_level_chart_df.copy()
-                    max_count = int(pd.to_numeric(chart_data["학생수(명)"], errors="coerce").max() or 0)
-                    y_max_count = max(1, max_count + 1)
+                if not summary_chart_df.empty:
+                    dist_for_chart = dist_chart_df.copy()
+                    summary_for_chart = summary_chart_df.copy()
+                    dist_for_chart["그래프요소"] = "분포"
+                    summary_for_chart["그래프요소"] = "요약"
+                    chart_source_df = pd.concat([dist_for_chart, summary_for_chart], ignore_index=True, sort=False)
+    
                     st.vega_lite_chart(
-                        chart_data,
+                        chart_source_df,
                         {
-                            "height": 340,
+                            "height": 390,
                             "width": "container",
+                            "resolve": {"scale": {"x": "shared", "y": "shared"}},
                             "config": {
                                 "axis": {"labelFontSize": 12, "titleFontSize": 13, "grid": True},
                                 "view": {"stroke": "transparent"},
                             },
-                            "mark": {
-                                "type": "bar",
-                                "cornerRadiusTopLeft": 6,
-                                "cornerRadiusTopRight": 6,
-                                "tooltip": True,
-                            },
-                            "encoding": {
-                                "x": {"field": "성취수준", "type": "nominal", "axis": {"title": "성취수준"}, "sort": ["A", "B", "C", "D", "E"]},
-                                "y": {
-                                    "field": "학생수(명)",
-                                    "type": "quantitative",
-                                    "axis": {"title": "학생수(명)", "format": "d"},
-                                    "scale": {"domain": [0, y_max_count], "nice": False, "zero": True},
+                            "layer": [
+                                {
+                                    "transform": [{"filter": "datum.그래프요소 == '분포'"}],
+                                    "mark": {
+                                        "type": "rect",
+                                        "cornerRadius": 2,
+                                        "color": "#94A3B8",
+                                        "opacity": 0.8,
+                                    },
+                                    "encoding": {
+                                        "x": {
+                                            "field": "왼쪽폭",
+                                            "type": "quantitative",
+                                            "axis": {
+                                                "title": "학급",
+                                                "labelAngle": 0,
+                                                "values": summary_chart_df["학급위치"].astype(int).tolist(),
+                                                "labelExpr": class_label_expr,
+                                            },
+                                        },
+                                        "x2": {"field": "오른쪽폭"},
+                                        "y": {
+                                            "field": "점수구간하한",
+                                            "type": "quantitative",
+                                            "axis": {"title": "점수"},
+                                            "scale": {"domain": [0, chart_y_max]},
+                                        },
+                                        "y2": {"field": "점수구간상한"},
+                                        "tooltip": [
+                                            {"field": "학급", "type": "nominal", "title": "학급"},
+                                            {"field": "점수구간", "type": "nominal", "title": "점수 구간"},
+                                            {"field": "도수(명)", "type": "quantitative", "title": "도수(명)"},
+                                        ],
+                                    },
                                 },
-                                "tooltip": [
-                                    {"field": "성취수준", "type": "nominal", "title": "성취수준"},
-                                    {"field": "학생수(명)", "type": "quantitative", "format": "d", "title": "학생수(명)"},
-                                    {"field": "비율", "type": "quantitative", "format": ".1%", "title": "비율"},
-                                ],
-                            },
+                                {
+                                    "transform": [{"filter": "datum.그래프요소 == '요약'"}],
+                                    "mark": {
+                                        "type": "rule",
+                                        "strokeWidth": 5,
+                                        "color": "#111827",
+                                        "opacity": 0.95,
+                                    },
+                                    "encoding": {
+                                        "x": {"field": "학급위치", "type": "quantitative"},
+                                        "y": {"field": "최저점", "type": "quantitative"},
+                                        "y2": {"field": "최고점"},
+                                        "tooltip": [
+                                            {"field": "학급", "type": "nominal", "title": "학급"},
+                                            {"field": "최고점", "type": "quantitative", "format": ".1f", "title": "최고점"},
+                                            {"field": "평균", "type": "quantitative", "format": ".1f", "title": "평균"},
+                                            {"field": "최저점", "type": "quantitative", "format": ".1f", "title": "최저점"},
+                                        ],
+                                    },
+                                },
+                                {
+                                    "transform": [{"filter": "datum.그래프요소 == '요약'"}],
+                                    "mark": {"type": "tick", "thickness": 4, "size": 36, "color": "#111827"},
+                                    "encoding": {
+                                        "x": {"field": "학급위치", "type": "quantitative"},
+                                        "y": {"field": "최고점", "type": "quantitative"},
+                                    },
+                                },
+                                {
+                                    "transform": [{"filter": "datum.그래프요소 == '요약'"}],
+                                    "mark": {"type": "tick", "thickness": 4, "size": 36, "color": "#111827"},
+                                    "encoding": {
+                                        "x": {"field": "학급위치", "type": "quantitative"},
+                                        "y": {"field": "최저점", "type": "quantitative"},
+                                    },
+                                },
+                                {
+                                    "transform": [{"filter": "datum.그래프요소 == '요약'"}],
+                                    "mark": {
+                                        "type": "text",
+                                        "align": "left",
+                                        "baseline": "middle",
+                                        "dx": 10,
+                                        "fontSize": 11,
+                                        "fontWeight": "bold",
+                                        "color": "#111827",
+                                    },
+                                    "encoding": {
+                                        "x": {"field": "학급위치", "type": "quantitative"},
+                                        "y": {"field": "최고점", "type": "quantitative"},
+                                        "text": {"field": "최고라벨", "type": "nominal"},
+                                    },
+                                },
+                                {
+                                    "transform": [{"filter": "datum.그래프요소 == '요약'"}],
+                                    "mark": {
+                                        "type": "text",
+                                        "align": "left",
+                                        "baseline": "middle",
+                                        "dx": 10,
+                                        "fontSize": 11,
+                                        "fontWeight": "bold",
+                                        "color": "#111827",
+                                    },
+                                    "encoding": {
+                                        "x": {"field": "학급위치", "type": "quantitative"},
+                                        "y": {"field": "최저점", "type": "quantitative"},
+                                        "text": {"field": "최저라벨", "type": "nominal"},
+                                    },
+                                },
+                                {
+                                    "transform": [{"filter": "datum.그래프요소 == '요약'"}],
+                                    "mark": {
+                                        "type": "point",
+                                        "filled": True,
+                                        "shape": "diamond",
+                                        "size": 260,
+                                        "color": "#E11D48",
+                                        "stroke": "white",
+                                        "strokeWidth": 2.5,
+                                    },
+                                    "encoding": {
+                                        "x": {"field": "학급위치", "type": "quantitative"},
+                                        "y": {"field": "평균", "type": "quantitative"},
+                                        "tooltip": [
+                                            {"field": "학급", "type": "nominal", "title": "학급"},
+                                            {"field": "평균", "type": "quantitative", "format": ".1f", "title": "평균"},
+                                        ],
+                                    },
+                                },
+                                {
+                                    "transform": [{"filter": "datum.그래프요소 == '요약'"}],
+                                    "mark": {
+                                        "type": "text",
+                                        "align": "left",
+                                        "baseline": "middle",
+                                        "dx": 12,
+                                        "dy": -1,
+                                        "fontSize": 12,
+                                        "fontWeight": "bold",
+                                        "color": "#E11D48",
+                                    },
+                                    "encoding": {
+                                        "x": {"field": "학급위치", "type": "quantitative"},
+                                        "y": {"field": "평균", "type": "quantitative"},
+                                        "text": {"field": "평균라벨", "type": "nominal"},
+                                    },
+                                },
+                            ],
                         },
                         use_container_width=True,
                     )
-                    st.dataframe(fmt_percent_df(chart_data), use_container_width=True, hide_index=True)
                 else:
-                    st.info("선택한 반의 성취수준 데이터가 없습니다.")
-            else:
-                st.info("표시할 학급 데이터가 없습니다.")
+                    st.info("표시할 학급별 점수 데이터가 없습니다.")
+    
+                st.markdown("##### 전체 성취수준별 비율")
+                total_level_chart_df = make_total_level_distribution_chart_df(analysis["individual"])
+                if not total_level_chart_df.empty:
+                    st.dataframe(fmt_percent_df(total_level_chart_df), use_container_width=True, hide_index=True)
+                else:
+                    st.info("표시할 전체 성취수준 데이터가 없습니다.")
 
+        with graph_col2:
+            with st.container(border=True):
+                st.markdown("#### 개별 반 분석 그래프")
+                class_values = sorted(analysis["individual"]["반"].dropna().unique().tolist())
+                if class_values:
+                    selected_class_for_graph = st.selectbox(
+                        "분석할 반 선택",
+                        class_values,
+                        format_func=lambda x: f"{int(x)}반" if pd.notna(x) and float(x).is_integer() else f"{x}반",
+                        key="achievement_class_graph_select",
+                    )
+                    class_level_chart_df = make_class_level_distribution_chart_df(analysis["individual"], selected_class_for_graph)
+                    if not class_level_chart_df.empty:
+                        chart_data = class_level_chart_df.copy()
+                        max_count = int(pd.to_numeric(chart_data["학생수(명)"], errors="coerce").max() or 0)
+                        y_max_count = max(1, max_count + 1)
+                        st.vega_lite_chart(
+                            chart_data,
+                            {
+                                "height": 340,
+                                "width": "container",
+                                "config": {
+                                    "axis": {"labelFontSize": 12, "titleFontSize": 13, "grid": True},
+                                    "view": {"stroke": "transparent"},
+                                },
+                                "mark": {
+                                    "type": "bar",
+                                    "cornerRadiusTopLeft": 6,
+                                    "cornerRadiusTopRight": 6,
+                                    "tooltip": True,
+                                },
+                                "encoding": {
+                                    "x": {"field": "성취수준", "type": "nominal", "axis": {"title": "성취수준"}, "sort": ["A", "B", "C", "D", "E"]},
+                                    "y": {
+                                        "field": "학생수(명)",
+                                        "type": "quantitative",
+                                        "axis": {"title": "학생수(명)", "format": "d"},
+                                        "scale": {"domain": [0, y_max_count], "nice": False, "zero": True},
+                                    },
+                                    "tooltip": [
+                                        {"field": "성취수준", "type": "nominal", "title": "성취수준"},
+                                        {"field": "학생수(명)", "type": "quantitative", "format": "d", "title": "학생수(명)"},
+                                        {"field": "비율", "type": "quantitative", "format": ".1%", "title": "비율"},
+                                    ],
+                                },
+                            },
+                            use_container_width=True,
+                        )
+                        st.dataframe(fmt_percent_df(chart_data), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("선택한 반의 성취수준 데이터가 없습니다.")
+                else:
+                    st.info("표시할 학급 데이터가 없습니다.")
+    
         with st.container(border=True):
             st.markdown("#### 학급별 성취도")
             st.dataframe(fmt_percent_df(analysis["class_achievement"]), use_container_width=True)
