@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.71
+성취수준별 평가결과 분석 웹앱 v1.72
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -72,6 +72,7 @@
 - v1.69: 학급별 문항 분석 표의 기본 정렬을 정답률 낮은 순에서 문항번호 순으로 변경
 - v1.70: 평가영역별 분석의 표 높이를 확대하고 환산점수 의미 안내 문구를 추가
 - v1.71: 문항별 분석과 평가영역별 분석 표 높이를 크게 확대하여 한 화면에서 더 많은 행을 확인하도록 조정
+- v1.72: 성취도 분석의 개별 반 그래프에 전체 성취수준 비율을 빨간색 기준점으로 함께 표시하여 선택 반과 전체를 비교하도록 개선
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -106,7 +107,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.71"
+APP_VERSION = "v1.72"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2695,9 +2696,23 @@ def main() -> None:
                     )
                     class_level_chart_df = make_class_level_distribution_chart_df(analysis["individual"], selected_class_for_graph)
                     if not class_level_chart_df.empty:
-                        chart_data = class_level_chart_df.copy()
-                        max_count = int(pd.to_numeric(chart_data["학생수(명)"], errors="coerce").max() or 0)
-                        y_max_count = max(1, max_count + 1)
+                        class_chart_data = class_level_chart_df.copy()
+                        total_chart_data = make_total_level_distribution_chart_df(analysis["individual"])
+                        chart_data = class_chart_data.merge(
+                            total_chart_data[["성취수준", "학생수(명)", "비율"]].rename(
+                                columns={"학생수(명)": "전체학생수(명)", "비율": "전체비율"}
+                            ),
+                            on="성취수준",
+                            how="left",
+                        )
+                        chart_data["선택반비율(%)"] = pd.to_numeric(chart_data["비율"], errors="coerce").fillna(0) * 100
+                        chart_data["전체비율(%)"] = pd.to_numeric(chart_data["전체비율"], errors="coerce").fillna(0) * 100
+                        y_max_ratio = max(
+                            5,
+                            float(chart_data[["선택반비율(%)", "전체비율(%)"]].max().max() or 0) + 5,
+                        )
+                        y_max_ratio = min(100, max(10, y_max_ratio))
+                        st.caption("회색 막대는 선택한 반의 성취수준 비율, 빨간 점은 전체 성취수준 비율입니다.")
                         st.vega_lite_chart(
                             chart_data,
                             {
@@ -2707,30 +2722,58 @@ def main() -> None:
                                     "axis": {"labelFontSize": 12, "titleFontSize": 13, "grid": True},
                                     "view": {"stroke": "transparent"},
                                 },
-                                "mark": {
-                                    "type": "bar",
-                                    "cornerRadiusTopLeft": 6,
-                                    "cornerRadiusTopRight": 6,
-                                    "tooltip": True,
-                                },
-                                "encoding": {
-                                    "x": {"field": "성취수준", "type": "nominal", "axis": {"title": "성취수준"}, "sort": ["A", "B", "C", "D", "E"]},
-                                    "y": {
-                                        "field": "학생수(명)",
-                                        "type": "quantitative",
-                                        "axis": {"title": "학생수(명)", "format": "d"},
-                                        "scale": {"domain": [0, y_max_count], "nice": False, "zero": True},
+                                "layer": [
+                                    {
+                                        "mark": {
+                                            "type": "bar",
+                                            "cornerRadiusTopLeft": 6,
+                                            "cornerRadiusTopRight": 6,
+                                            "color": "#94A3B8",
+                                            "opacity": 0.85,
+                                        },
+                                        "encoding": {
+                                            "x": {"field": "성취수준", "type": "nominal", "axis": {"title": "성취수준"}, "sort": ["A", "B", "C", "D", "E"]},
+                                            "y": {
+                                                "field": "선택반비율(%)",
+                                                "type": "quantitative",
+                                                "axis": {"title": "비율(%)"},
+                                                "scale": {"domain": [0, y_max_ratio], "nice": False, "zero": True},
+                                            },
+                                            "tooltip": [
+                                                {"field": "성취수준", "type": "nominal", "title": "성취수준"},
+                                                {"field": "학생수(명)", "type": "quantitative", "format": "d", "title": "선택 반 학생수"},
+                                                {"field": "선택반비율(%)", "type": "quantitative", "format": ".1f", "title": "선택 반 비율(%)"},
+                                            ],
+                                        },
                                     },
-                                    "tooltip": [
-                                        {"field": "성취수준", "type": "nominal", "title": "성취수준"},
-                                        {"field": "학생수(명)", "type": "quantitative", "format": "d", "title": "학생수(명)"},
-                                        {"field": "비율", "type": "quantitative", "format": ".1%", "title": "비율"},
-                                    ],
-                                },
+                                    {
+                                        "mark": {
+                                            "type": "point",
+                                            "filled": True,
+                                            "shape": "circle",
+                                            "size": 150,
+                                            "color": "#E11D48",
+                                            "stroke": "white",
+                                            "strokeWidth": 2,
+                                        },
+                                        "encoding": {
+                                            "x": {"field": "성취수준", "type": "nominal", "sort": ["A", "B", "C", "D", "E"]},
+                                            "y": {"field": "전체비율(%)", "type": "quantitative"},
+                                            "tooltip": [
+                                                {"field": "성취수준", "type": "nominal", "title": "성취수준"},
+                                                {"field": "전체학생수(명)", "type": "quantitative", "format": "d", "title": "전체 학생수"},
+                                                {"field": "전체비율(%)", "type": "quantitative", "format": ".1f", "title": "전체 비율(%)"},
+                                            ],
+                                        },
+                                    },
+                                ],
                             },
                             use_container_width=True,
                         )
-                        st.dataframe(fmt_percent_df(chart_data), use_container_width=True, hide_index=True)
+                        comparison_table = chart_data[["성취수준", "학생수(명)", "비율", "전체학생수(명)", "전체비율"]].rename(
+                            columns={"학생수(명)": "선택반학생수(명)", "비율": "선택반비율"}
+                        )
+                        st.dataframe(fmt_percent_df(comparison_table), use_container_width=True, hide_index=True)
                     else:
                         st.info("선택한 반의 성취수준 데이터가 없습니다.")
                 else:
