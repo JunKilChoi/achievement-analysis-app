@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.80
+성취수준별 평가결과 분석 웹앱 v1.81
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -81,6 +81,7 @@
 - v1.78: 평가영역별 분석 표에서 평균정답률을 숨기고 정답률 열을 강조 표시
 - v1.79: 성취기준별 분석 표에서 성취기준과 정답률 열을 강조하고 기본 정렬을 성취기준 오름차순으로 변경
 - v1.80: 성취수준별 문항 분석 탭에서 문항번호 순 정렬, 빈 성취수준 표시 보정, 안내 문구를 추가하여 표가 비어 보이는 문제를 개선
+- v1.81: 학생 개별 탭의 요약표에서 중복 점수 열을 숨기고 환산점수명을 100점 만점 환산점수로 변경하며 영역총점과 성취수준을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -115,7 +116,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.80"
+APP_VERSION = "v1.81"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1909,6 +1910,17 @@ def style_standard_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
             styles[col] = "background-color: #fff3cd; font-weight: 700;"
     return df.style.apply(lambda _: styles, axis=None)
 
+
+def style_individual_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    """학생 개별 요약표에서 영역총점과 성취수준 열을 같은 색으로 강조한다."""
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+    highlight_cols = {"영역총점", "영역총점(점)", "성취수준"}
+    for col in df.columns:
+        name = str(col).strip()
+        if name in highlight_cols:
+            styles[col] = "background-color: #fff3cd; font-weight: 700;"
+    return df.style.apply(lambda _: styles, axis=None)
+
 def style_item_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """문항별 분석에서 평가영역, 전체 정답률, 변별도 세 열만 같은 색으로 강조한다."""
     styles = pd.DataFrame("", index=df.index, columns=df.columns)
@@ -3105,7 +3117,17 @@ def main() -> None:
     elif selected_analysis_tab == "학생 개별":
         with st.container(border=True):
             st.markdown("학생 이름은 웹앱 내부 확인용입니다. AI 분석에 보낼 때는 익명화 옵션을 권장합니다.")
-            st.dataframe(fmt_percent_df(analysis["individual"].sort_values(["반", "번호"])), use_container_width=True, height=420)
+            individual_view = analysis["individual"].sort_values(["반", "번호"]).copy()
+            hide_cols = ["선택형계산점수", "최종점수", "계산점수", "성취수준기준점수"]
+            individual_view = individual_view.drop(columns=[c for c in hide_cols if c in individual_view.columns])
+            if "환산점수" in individual_view.columns:
+                individual_view = individual_view.rename(columns={"환산점수": "100점 만점 환산점수"})
+            preferred_individual_cols = [
+                "반/번호", "반", "번호", "이름", "선택형점수", "서답형점수", "기타점수",
+                "영역총점", "100점 만점 환산점수", "성취수준", "오답문항"
+            ]
+            individual_view = individual_view[[c for c in preferred_individual_cols if c in individual_view.columns] + [c for c in individual_view.columns if c not in preferred_individual_cols]]
+            st.dataframe(style_individual_analysis_df(fmt_percent_df(individual_view)), use_container_width=True, height=420, hide_index=True)
         with st.container(border=True):
             student_options = analysis["individual"].sort_values(["반", "번호"])["반/번호"].tolist()
             selected_student = st.selectbox("학생 선택", student_options)
