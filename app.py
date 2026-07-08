@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.54
+성취수준별 평가결과 분석 웹앱 v1.55
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -57,6 +57,7 @@
 - v1.52: 문항정보 수정표를 적용 버튼 방식으로 변경하여 평가요소 수정값이 셀 편집 중간에 일부 반영되지 않는 문제를 안정화
 - v1.53: 문항정보 수정 방식을 표형 data_editor에서 문항별 가로 입력칸 방식으로 변경하고 문항 추가/삭제 기능 추가
 - v1.54: 문항번호 입력칸의 +/- 버튼을 제거하고 헤더 중앙 정렬 및 문항 삭제 후 검증 오류 방지 처리
+- v1.55: 문항정보표 업로드 파일을 제거하면 문항정보 수정 세션을 초기화하여 같은 파일을 다시 올릴 때 원본 문항정보를 다시 읽도록 수정
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -89,7 +90,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.54"
+APP_VERSION = "v1.55"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1953,6 +1954,17 @@ def main() -> None:
                 st.rerun()
 
     answer_files = list(st.session_state.answer_file_store.values())
+
+    # 문항정보표를 파일 업로더에서 제거한 경우에는 편집 세션을 함께 초기화합니다.
+    # 같은 문항정보표 파일을 다시 올렸을 때 이전에 삭제/수정한 문항이 남지 않고,
+    # 엑셀 원본을 새로 읽어 오도록 하기 위한 처리입니다.
+    if not question_file:
+        for key in [
+            "question_info_editor_signature",
+            "question_info_editor_df",
+            "question_info_editor_applied_at",
+        ]:
+            st.session_state.pop(key, None)
 
     if not question_file or not answer_files:
         st.info("문항정보표와 학생답 정오표를 모두 업로드하면 자동 분석을 시작합니다. 정오표는 여러 개 업로드할 수 있습니다.")
