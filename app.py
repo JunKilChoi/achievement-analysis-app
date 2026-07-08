@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.44
+성취수준별 평가결과 분석 웹앱 v1.45
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -47,6 +47,7 @@
 - v1.42: 복수정답 표기(예: 2,3 또는 23)와 학생답 복수답안코드 A~Z를 선택지 조합으로 변환하여 정답 판정/검증/분석에 반영
 - v1.43: 서답형이 포함된 시험에서 성취도·총점·평균·성취수준 분석은 정오표의 영역총점을 우선 사용하고, 선택형 문항 계산점수는 검증/문항 분석용으로 분리
 - v1.44: 모든 AI 분석에 중점 분석 요청 입력 박스를 추가하고, 입력 시 기존 프롬프트 마지막에 평가 전문가 관점의 추가 분석 요청으로 반영
+- v1.45: 문항정보 수정표 편집값을 세션에 저장해 수정 내용이 분석에 확실히 반영되도록 하고, 평가요소 확인용 하이라이트 표 추가
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -78,7 +79,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.44"
+APP_VERSION = "v1.45"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1643,6 +1644,49 @@ def prepare_parsed(question_file: Any, answer_files: List[Dict[str, Any]]) -> Pa
     )
 
 
+
+def make_question_editor_signature(question_file: Any, answer_files: List[Dict[str, Any]]) -> str:
+    """문항정보 수정표를 어떤 업로드 묶음에 연결할지 판별하는 서명."""
+    h = hashlib.sha256()
+    h.update(question_file.getvalue())
+    for item in answer_files:
+        h.update(str(item.get("name", "")).encode("utf-8"))
+        h.update(item.get("data", b""))
+    return h.hexdigest()
+
+
+def normalize_question_editor_df(df: pd.DataFrame) -> pd.DataFrame:
+    """st.data_editor에 안정적으로 넣기 위해 문항정보표 dtype과 표시 순서를 정리."""
+    out = df.copy()
+    preferred_cols = ["문항번호", "평가영역", "성취기준", "난이도", "배점", "정답"]
+    for col in preferred_cols:
+        if col not in out.columns:
+            out[col] = "" if col not in ["문항번호", "배점"] else 0
+    if "문항번호" in out.columns:
+        out["문항번호"] = pd.to_numeric(out["문항번호"], errors="coerce").fillna(0).astype(int)
+    if "배점" in out.columns:
+        out["배점"] = pd.to_numeric(out["배점"], errors="coerce").fillna(0.0).astype(float)
+    for text_col in ["평가영역", "성취기준", "난이도", "정답"]:
+        if text_col in out.columns:
+            out[text_col] = out[text_col].fillna("").astype(str)
+    ordered = [c for c in preferred_cols if c in out.columns] + [c for c in out.columns if c not in preferred_cols]
+    return out[ordered]
+
+
+def make_eval_area_highlight_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    """평가요소/평가영역 열을 확인하기 쉽도록 별도 미리보기 표에서 강조."""
+    show_cols = [c for c in ["문항번호", "평가영역", "성취기준", "난이도", "배점", "정답"] if c in df.columns]
+    view = df[show_cols].copy()
+
+    def highlight_eval_area(row: pd.Series) -> List[str]:
+        return [
+            "background-color: #fff3cd; font-weight: 700;" if col == "평가영역" else ""
+            for col in row.index
+        ]
+
+    return view.style.apply(highlight_eval_area, axis=1)
+
+
 def is_percent_column(col: Any, series: Optional[pd.Series] = None) -> bool:
     """0~1 비율값으로 계산된 컬럼을 화면/엑셀에서 %로 표시하기 위한 판별 함수."""
     name = str(col)
@@ -1863,36 +1907,45 @@ def main() -> None:
     st.subheader("2. 문항정보 수정")
     st.caption("나이스 문항정보표에서 자동 인식한 값입니다. 평가 후 분석 자료를 더 구체화하려면 평가영역, 성취기준, 난이도 등을 여기서 수정하세요. 수정한 값은 아래 분석 결과, 확인용 엑셀, 5종 분석 엑셀, AI 분석에 모두 반영됩니다.")
 
-    editable_question_df = parsed.question_df.copy()
+    editor_signature = make_question_editor_signature(question_file, answer_files)
+    editor_state_key = "question_info_editor_df"
+    editor_sig_key = "question_info_editor_signature"
 
-    # Streamlit Cloud의 st.data_editor는 column_config와 실제 dtype이 맞지 않으면
-    # StreamlitAPIException을 발생시킵니다.
-    # 나이스 원본에서 평가영역/정답 등이 숫자처럼 읽히는 경우가 있어,
-    # 편집용 표에서는 텍스트 열을 명시적으로 문자열 dtype으로 통일합니다.
-    if "문항번호" in editable_question_df.columns:
-        editable_question_df["문항번호"] = pd.to_numeric(editable_question_df["문항번호"], errors="coerce").fillna(0).astype(int)
-    if "배점" in editable_question_df.columns:
-        editable_question_df["배점"] = pd.to_numeric(editable_question_df["배점"], errors="coerce").fillna(0.0).astype(float)
-    for text_col in ["평가영역", "성취기준", "난이도", "정답"]:
-        if text_col in editable_question_df.columns:
-            editable_question_df[text_col] = editable_question_df[text_col].fillna("").astype(str)
+    # 파일 묶음이 바뀐 경우에만 원본 문항정보로 초기화하고,
+    # 같은 파일에서는 사용자가 수정한 평가영역/성취기준/난이도/배점/정답을 세션에 계속 보존합니다.
+    if st.session_state.get(editor_sig_key) != editor_signature:
+        st.session_state[editor_sig_key] = editor_signature
+        st.session_state[editor_state_key] = normalize_question_editor_df(parsed.question_df)
+
+    editable_question_df = normalize_question_editor_df(st.session_state[editor_state_key])
+
+    st.info("표에서 수정한 평가요소, 성취기준, 난이도, 배점, 정답은 아래 분석과 AI 분석에 바로 반영됩니다. 파일을 다시 올리거나 정오표 목록을 초기화하기 전까지 수정값이 유지됩니다.")
 
     edited_question_df = st.data_editor(
         editable_question_df,
         use_container_width=True,
         height=360,
         hide_index=True,
-        key="question_info_editor",
+        key=f"question_info_editor_{editor_signature[:12]}",
         disabled=["문항번호"],
+        column_order=["문항번호", "평가영역", "성취기준", "난이도", "배점", "정답"],
         column_config={
             "문항번호": st.column_config.NumberColumn("문항번호", step=1, disabled=True),
-            "평가영역": st.column_config.TextColumn("평가영역", help="분석에 사용할 평가영역/평가요소명을 구체적으로 수정할 수 있습니다."),
+            "평가영역": st.column_config.TextColumn("★ 평가요소", help="분석에 사용할 평가영역/평가요소명을 구체적으로 수정할 수 있습니다."),
             "성취기준": st.column_config.TextColumn("성취기준", width="large", help="AI 해석과 평가영역별 분석에 반영됩니다."),
             "난이도": st.column_config.SelectboxColumn("난이도", options=["", "어려움", "보통", "쉬움"]),
             "배점": st.column_config.NumberColumn("배점", step=0.1, format="%.2f"),
             "정답": st.column_config.TextColumn("정답"),
         },
     )
+
+    # st.data_editor의 반환값을 세션에 다시 저장해 다음 rerun에서도 수정값이 사라지지 않게 합니다.
+    edited_question_df = normalize_question_editor_df(edited_question_df)
+    st.session_state[editor_state_key] = edited_question_df.copy()
+
+    with st.expander("평가요소 하이라이트 확인", expanded=False):
+        st.caption("수정해야 할 핵심 열인 평가요소만 노란색으로 표시한 확인용 표입니다. 실제 수정은 위 표에서 합니다.")
+        st.dataframe(make_eval_area_highlight_df(edited_question_df), use_container_width=True, hide_index=True)
 
     # 편집값 정규화 후 전체 분석 데이터에 재반영
     parsed.question_df = edited_question_df.copy()
