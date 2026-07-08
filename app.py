@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.79
+성취수준별 평가결과 분석 웹앱 v1.80
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -80,6 +80,7 @@
 - v1.77: 문항별 분석 표에서도 평가영역, 전체 정답률, 변별도 세 열을 같은 색으로 강조
 - v1.78: 평가영역별 분석 표에서 평균정답률을 숨기고 정답률 열을 강조 표시
 - v1.79: 성취기준별 분석 표에서 성취기준과 정답률 열을 강조하고 기본 정렬을 성취기준 오름차순으로 변경
+- v1.80: 성취수준별 문항 분석 탭에서 문항번호 순 정렬, 빈 성취수준 표시 보정, 안내 문구를 추가하여 표가 비어 보이는 문제를 개선
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -114,7 +115,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.79"
+APP_VERSION = "v1.80"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -939,6 +940,8 @@ def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, flo
     level_item_pivot = level_item_pivot[["문항번호", "A", "B", "C", "D", "E"]]
     level_item_pivot = item[["문항번호", "정답률", "평가영역"]].merge(level_item_pivot, on="문항번호", how="left")
     level_item_pivot["수준간격차"] = level_item_pivot[["A", "B", "C", "D", "E"]].max(axis=1) - level_item_pivot[["A", "B", "C", "D", "E"]].min(axis=1)
+    # 화면에서 비어 보이지 않도록 문항번호 순서를 명시적으로 고정한다.
+    level_item_pivot = level_item_pivot.sort_values("문항번호", ascending=True).reset_index(drop=True)
 
     # 학생 개별 분석용 요약
     individual_cols = [
@@ -3082,7 +3085,22 @@ def main() -> None:
     elif selected_analysis_tab == "성취수준별 분석":
         with st.container(border=True):
             st.markdown("#### 성취수준별 문항 분석")
-            st.dataframe(fmt_percent_df(analysis["level_item"].sort_values("정답률")), use_container_width=True, height=520)
+            st.info(
+                "A~E 열은 각 성취수준 학생들의 문항별 정답률입니다. "
+                "기본 정렬은 문항번호 순이며, 해당 성취수준 학생이 없는 경우에는 '-'로 표시됩니다."
+            )
+            level_df = analysis.get("level_item", pd.DataFrame()).copy()
+            if level_df.empty:
+                st.warning("성취수준별 문항 분석에 표시할 데이터가 없습니다. 성취수준 분할점수와 학생 총점이 정상적으로 산출되었는지 확인해 주세요.")
+            else:
+                if "문항번호" in level_df.columns:
+                    level_df["문항번호"] = pd.to_numeric(level_df["문항번호"], errors="coerce")
+                    level_df = level_df.sort_values("문항번호", ascending=True)
+                level_display = fmt_percent_df(level_df)
+                for level_col in list("ABCDE"):
+                    if level_col in level_display.columns:
+                        level_display[level_col] = level_display[level_col].replace("", "-").fillna("-")
+                st.dataframe(level_display, use_container_width=True, height=760, hide_index=True)
 
     elif selected_analysis_tab == "학생 개별":
         with st.container(border=True):
