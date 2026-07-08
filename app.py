@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.78
+성취수준별 평가결과 분석 웹앱 v1.79
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -79,6 +79,7 @@
 - v1.76: 학급별 문항 분석 표 강조 대상을 전체 정답률, 변별도, 학급간최대차 세 열로 한정하고 같은 색으로 통일
 - v1.77: 문항별 분석 표에서도 평가영역, 전체 정답률, 변별도 세 열을 같은 색으로 강조
 - v1.78: 평가영역별 분석 표에서 평균정답률을 숨기고 정답률 열을 강조 표시
+- v1.79: 성취기준별 분석 표에서 성취기준과 정답률 열을 강조하고 기본 정렬을 성취기준 오름차순으로 변경
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -113,7 +114,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.78"
+APP_VERSION = "v1.79"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1894,6 +1895,17 @@ def style_domain_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
             styles[col] = "background-color: #fff3cd; font-weight: 700;"
     return df.style.apply(lambda _: styles, axis=None)
 
+
+def style_standard_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    """성취기준별 분석에서 성취기준과 정답률 열을 같은 색으로 강조한다."""
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+    highlight_cols = {"성취기준", "정답률", "정답률(%)", "성취기준정답률", "성취기준정답률(%)"}
+    for col in df.columns:
+        name = str(col).strip()
+        if name in highlight_cols:
+            styles[col] = "background-color: #fff3cd; font-weight: 700;"
+    return df.style.apply(lambda _: styles, axis=None)
+
 def style_item_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """문항별 분석에서 평가영역, 전체 정답률, 변별도 세 열만 같은 색으로 강조한다."""
     styles = pd.DataFrame("", index=df.index, columns=df.columns)
@@ -3050,7 +3062,8 @@ def main() -> None:
         with st.container(border=True):
             st.markdown("#### 성취기준별 분석")
             standard_cols = [c for c in ["성취기준", "평가영역", "문항번호", "문항수", "배점합계", "평균점수", "환산평균", "정답률"] if c in analysis["standard"].columns]
-            st.dataframe(fmt_percent_df(analysis["standard"][standard_cols].sort_values("정답률")), use_container_width=True, height=520, hide_index=True)
+            standard_display = fmt_percent_df(analysis["standard"][standard_cols].sort_values("성취기준"))
+            st.dataframe(style_standard_analysis_df(standard_display), use_container_width=True, height=520, hide_index=True)
         with st.container(border=True):
             st.markdown("#### 개인별 성취기준 분석")
             selected_student_standard = render_student_selector(analysis["individual"], "standard_individual")
@@ -3063,7 +3076,8 @@ def main() -> None:
                 )
                 standard_one = standard_one.rename(columns={"평가영역_y": "평가영역", "평가영역_x": "학생평가영역"})
                 standard_cols_one = [c for c in ["성취기준", "평가영역", "문항번호", "성취기준점수", "성취기준배점", "성취기준환산점수", "성취기준정답률"] if c in standard_one.columns]
-                st.dataframe(fmt_percent_df(standard_one[standard_cols_one].sort_values("성취기준")), use_container_width=True, height=360, hide_index=True)
+                standard_one_display = fmt_percent_df(standard_one[standard_cols_one].sort_values("성취기준"))
+                st.dataframe(style_standard_analysis_df(standard_one_display), use_container_width=True, height=360, hide_index=True)
 
     elif selected_analysis_tab == "성취수준별 분석":
         with st.container(border=True):
