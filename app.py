@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.87
+성취수준별 평가결과 분석 웹앱 v1.88
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -86,6 +86,7 @@
 - v1.85: 학생 개별 분석 프리셋 중 맞춤형 피드백과 다음 시험 학습 전략 조언에 과목 특성을 고려한 학습 방식 개선 중심 안내 반영
 - v1.86: AI 분석 내부의 기본/고급 분석 전환을 탭에서 선택형 메뉴로 변경하여 기본 분석 선택 시 고급 분석 영역이 함께 펼쳐지는 현상 수정
 - v1.87: 원안지 기반 고급 분석 전용 프리셋이 확실히 표시되도록 상태키를 분리하고 프리셋 안내 문구를 보강
+- v1.88: 고급 분석에서 별도의 분석 범위 선택을 제거하고, 원안지 기반 고급 분석 프리셋 중심으로 실행되도록 단순화
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
@@ -121,7 +122,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.87"
+APP_VERSION = "v1.88"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1247,6 +1248,15 @@ def render_focus_request_with_preset(
         height=height,
         key=text_key,
     )
+
+
+def infer_advanced_scope_from_preset(preset_name: str) -> str:
+    """고급 분석 프리셋 이름을 내부 분석 범위값으로 매핑한다."""
+    if preset_name == "오답 선택지 설계 분석":
+        return "오답 선택지 분석"
+    if preset_name in ["주요 문항 집중 분석", "학생들이 헷갈렸을 가능성이 큰 문항 분석"]:
+        return "주요 문항 집중 분석"
+    return "원안지 기반 전체 시험 분석"
 
 
 def parse_question_number_input(raw: str, max_question: Optional[int] = None) -> List[int]:
@@ -3378,16 +3388,24 @@ def main() -> None:
         elif ai_section_mode == "고급 분석: 원안지 기반 심층 해석":
             with st.container(border=True):
                 st.markdown("#### 고급 분석: 원안지 기반 심층 해석")
-                st.markdown("원안지 PDF를 업로드한 뒤, 분석 유형과 문항 범위를 정해 문항 내용 기반 심층 분석을 생성합니다.")
+                st.markdown("원안지 PDF를 업로드한 뒤, 중점 분석 요청 프리셋을 고르고 문항 내용 기반 심층 분석을 생성합니다.")
                 source_pdf = st.file_uploader("원안지 PDF 업로드", type=["pdf"], key="source_exam_pdf")
-                advanced_scope = st.selectbox(
-                    "고급 분석 범위",
-                    ["원안지 기반 전체 시험 분석", "주요 문항 집중 분석", "오답 선택지 분석", "성취기준 적합성 분석", "원안지 기반 학생 개별 분석"],
-                    key="advanced_ai_scope",
+
+                advanced_focus_request = render_focus_request_with_preset(
+                    "중점 분석 요청 프리셋",
+                    ADVANCED_FOCUS_PRESETS,
+                    "advanced_focus_preset_v188",
+                    "advanced_focus_request_v188",
+                    "예: 문항 완성도·엄밀성, 오답 선택지 매력도, 발문 명확성, 성취기준 적합성 등을 중점적으로 분석해줘.",
+                    "원안지 기반 고급 분석 전용 프리셋입니다. 문항 설계, 발문, 선택지, 정답 근거, 문항 완성도·엄밀성 등 원안지 PDF를 함께 보며 분석할 관점을 고를 수 있습니다. 프리셋을 고르면 아래 요청 문구가 자동 입력되고, 필요하면 직접 수정할 수 있습니다.",
                 )
+                selected_advanced_preset = st.session_state.get("advanced_focus_preset_v188", "직접 입력")
+                advanced_scope = infer_advanced_scope_from_preset(selected_advanced_preset)
+                if selected_advanced_preset != "직접 입력":
+                    st.caption(f"선택한 분석 관점: {selected_advanced_preset}")
 
                 max_q = int(pd.to_numeric(parsed.question_df["문항번호"], errors="coerce").max()) if not parsed.question_df.empty else None
-                need_item_input = advanced_scope in ["주요 문항 집중 분석", "오답 선택지 분석", "원안지 기반 학생 개별 분석"]
+                need_item_input = advanced_scope in ["주요 문항 집중 분석", "오답 선택지 분석"]
                 item_number_raw = st.text_input(
                     "분석할 문항번호",
                     value="",
@@ -3404,20 +3422,6 @@ def main() -> None:
                     st.caption("문항번호를 비워두면 앱의 통계 결과를 바탕으로 우선 분석 문항을 AI가 선정합니다.")
 
                 advanced_student_key = None
-                if advanced_scope == "원안지 기반 학생 개별 분석":
-                    st.markdown("##### 학생 선택")
-                    advanced_student_key = render_student_selector(analysis["individual"], "advanced_student_ai")
-                    if advanced_student_key:
-                        st.caption("선택 학생의 전체 문항 풀이 결과와 원안지를 함께 분석합니다.")
-
-                advanced_focus_request = render_focus_request_with_preset(
-                    "중점 분석 요청 프리셋",
-                    ADVANCED_FOCUS_PRESETS,
-                    "advanced_focus_preset_v187",
-                    "advanced_focus_request_v187",
-                    "예: 문항 완성도·엄밀성, 오답 선택지 매력도, 발문 명확성, 성취기준 적합성 등을 중점적으로 분석해줘.",
-                    "원안지 기반 고급 분석 전용 프리셋입니다. 문항 설계, 발문, 선택지, 정답 근거, 문항 완성도·엄밀성 등 원안지 PDF를 함께 보며 분석할 관점을 고를 수 있습니다. 프리셋을 고르면 아래 요청 문구가 자동 입력되고, 필요하면 직접 수정할 수 있습니다.",
-                )
 
                 pdf_name = source_pdf.name if source_pdf is not None else "원안지 PDF 미업로드"
                 advanced_prompt = build_advanced_exam_ai_prompt(
@@ -3443,7 +3447,7 @@ def main() -> None:
                 pdf_context_name = source_pdf.name if source_pdf is not None else ""
                 advanced_context = hashlib.sha1(f"{advanced_scope}|{item_number_raw}|{advanced_student_key}|{pdf_context_name}|{advanced_prompt}".encode("utf-8")).hexdigest()
 
-                # 분석 범위·문항번호·학생·PDF가 바뀌면 이전 고급 분석 결과를 현재 화면에서 제거한다.
+                # 프리셋·문항번호·PDF가 바뀌면 이전 고급 분석 결과를 현재 화면에서 제거한다.
                 if st.session_state.get(adv_context_state_key) and st.session_state.get(adv_context_state_key) != advanced_context:
                     for _key in [adv_result_state_key, adv_docx_state_key, adv_filename_state_key, adv_meta_state_key, adv_context_state_key]:
                         st.session_state.pop(_key, None)
@@ -3452,7 +3456,7 @@ def main() -> None:
                 if source_pdf is None:
                     st.info("원안지 PDF를 업로드하면 고급 분석을 실행할 수 있습니다.")
 
-                if st.button("고급 분석 실행", type="primary", key="run_advanced_ai", disabled=(source_pdf is None or (advanced_scope == "원안지 기반 학생 개별 분석" and not advanced_student_key))):
+                if st.button("고급 분석 실행", type="primary", key="run_advanced_ai", disabled=(source_pdf is None)):
                     if not api_key:
                         st.error("OpenAI API Key를 입력하세요.")
                     else:
