@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.75
+성취수준별 평가결과 분석 웹앱 v1.76
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -76,6 +76,7 @@
 - v1.73: 성취도 분석의 개별 반 그래프를 선택 반 파란색 막대와 전체 빨간색 막대가 성취수준별로 나란히 보이도록 변경하고 동적 범례를 추가
 - v1.74: 개별 반 성취수준 비교 그래프의 범례를 제거하고 문항별 분석의 난이도 비교 표 높이를 확대
 - v1.75: 학급별 문항 분석 표에서 정답률, 변별도, 학급간 최대차 열을 서로 다른 색으로 강조
+- v1.76: 학급별 문항 분석 표 강조 대상을 전체 정답률, 변별도, 학급간최대차 세 열로 한정하고 같은 색으로 통일
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -1869,16 +1870,13 @@ def render_wrapped_table(df: pd.DataFrame, key: str = "wrapped-table") -> None:
 
 
 def style_class_item_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
-    """학급별 문항 분석에서 핵심 해석 열을 색으로 구분해 강조한다."""
+    """학급별 문항 분석에서 전체 정답률, 변별도, 학급간최대차 세 열만 같은 색으로 강조한다."""
     styles = pd.DataFrame("", index=df.index, columns=df.columns)
+    highlight_cols = {"정답률", "정답률(%)", "변별도", "변별도(%)", "학급간최대차", "학급간최대차(%)", "학급간 최대차", "학급간 최대차(%)"}
     for col in df.columns:
-        name = str(col)
-        if "학급간최대차" in name or "학급간 최대차" in name:
+        name = str(col).strip()
+        if name in highlight_cols:
             styles[col] = "background-color: #fff3cd; font-weight: 700;"
-        elif "변별도" in name:
-            styles[col] = "background-color: #f3e8ff; font-weight: 700;"
-        elif "정답률" in name:
-            styles[col] = "background-color: #e8f2ff; font-weight: 700;"
     return df.style.apply(lambda _: styles, axis=None)
 
 
