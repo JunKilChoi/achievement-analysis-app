@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.73
+성취수준별 평가결과 분석 웹앱 v1.74
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -74,6 +74,7 @@
 - v1.71: 문항별 분석과 평가영역별 분석 표 높이를 크게 확대하여 한 화면에서 더 많은 행을 확인하도록 조정
 - v1.72: 성취도 분석의 개별 반 그래프에 전체 성취수준 비율을 빨간색 기준점으로 함께 표시하여 선택 반과 전체를 비교하도록 개선
 - v1.73: 성취도 분석의 개별 반 그래프를 선택 반 파란색 막대와 전체 빨간색 막대가 성취수준별로 나란히 보이도록 변경하고 동적 범례를 추가
+- v1.74: 개별 반 성취수준 비교 그래프의 범례를 제거하고 문항별 분석의 난이도 비교 표 높이를 확대
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -108,7 +109,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.73"
+APP_VERSION = "v1.74"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2741,7 +2742,6 @@ def main() -> None:
                                 "width": "container",
                                 "config": {
                                     "axis": {"labelFontSize": 12, "titleFontSize": 13, "grid": True},
-                                    "legend": {"orient": "top-right", "title": "구분", "labelFontSize": 12, "titleFontSize": 12},
                                     "view": {"stroke": "transparent"},
                                 },
                                 "mark": {
@@ -2775,7 +2775,7 @@ def main() -> None:
                                             "domain": ["전체", selected_class_label],
                                             "range": ["#E11D48", "#2563EB"],
                                         },
-                                        "legend": {"title": "구분", "orient": "top-right"},
+                                        "legend": None,
                                     },
                                     "tooltip": [
                                         {"field": "구분", "type": "nominal", "title": "구분"},
@@ -2938,7 +2938,7 @@ def main() -> None:
         if "차이해석" in display_gap.columns:
             display_gap = display_gap.rename(columns={"차이해석": "판정"})
         with st.container(border=True):
-            st.dataframe(display_gap, use_container_width=True, height=320, hide_index=True)
+            st.dataframe(display_gap, use_container_width=True, height=760, hide_index=True)
 
     elif selected_analysis_tab == "학급별 분석":
         with st.container(border=True):
