@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.58
+성취수준별 평가결과 분석 웹앱 v1.59
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -60,6 +60,7 @@
 - v1.55: 문항정보표 업로드 파일을 제거하면 문항정보 수정 세션을 초기화하여 같은 파일을 다시 올릴 때 원본 문항정보를 다시 읽도록 수정
 - v1.56: 문항정보 수정 영역에서 문항 추가 버튼을 적용 버튼 옆으로 이동하고 선택 문항 삭제 버튼을 삭제 체크 열 하단으로 배치
 - v1.57: 문항정보 수정 영역의 문항정보 수정값 적용, 문항 추가, 선택 문항 삭제 버튼을 한 줄에 나란히 배치
+- v1.59: 평가정보 자동 인식값 수정 영역을 즉시 반영 방식에서 적용 버튼 방식으로 변경
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
@@ -93,7 +94,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.58"
+APP_VERSION = "v1.59"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2037,31 +2038,57 @@ def main() -> None:
     s2.metric("서답형 만점", parsed.exam_info.get("서답형만점", "-"))
     s3.metric("과목 만점", parsed.exam_info.get("과목만점", "-"))
 
+    auto_info_key_suffix = auto_info_signature[:8]
+    auto_info_widget_keys = [
+        f"auto_year_{auto_info_key_suffix}",
+        f"auto_grade_{auto_info_key_suffix}",
+        f"auto_semester_{auto_info_key_suffix}",
+        f"auto_eval_type_{auto_info_key_suffix}",
+        f"auto_subject_{auto_info_key_suffix}",
+        f"auto_selected_q_count_{auto_info_key_suffix}",
+        f"auto_written_q_count_{auto_info_key_suffix}",
+        f"auto_student_count_{auto_info_key_suffix}",
+        f"auto_answer_file_count_{auto_info_key_suffix}",
+        f"auto_selected_full_score_{auto_info_key_suffix}",
+        f"auto_written_full_score_{auto_info_key_suffix}",
+        f"auto_total_full_score_{auto_info_key_suffix}",
+    ]
+
     with st.expander("평가정보 자동 인식값 수정", expanded=False):
-        st.caption("위 자동 인식 결과에 표시된 값을 모두 수정할 수 있습니다. 학생 수와 정오표 파일 수는 실제 데이터 행을 바꾸는 값이 아니라 보고서와 AI 분석에 표시되는 평가 정보입니다.")
+        st.caption("위 자동 인식 결과에 표시된 값을 모두 수정할 수 있습니다. 수정한 값은 '자동 인식값 수정 적용' 버튼을 눌러야 아래 분석과 AI 분석에 반영됩니다. 학생 수와 정오표 파일 수는 실제 데이터 행을 바꾸는 값이 아니라 보고서와 AI 분석에 표시되는 평가 정보입니다.")
+        temp_auto_info_values = auto_info_values.copy()
+
         cols = st.columns(5)
-        auto_info_values["학년도"] = cols[0].text_input("학년도", auto_info_values.get("학년도", "2026"), key=f"auto_year_{auto_info_signature[:8]}")
-        auto_info_values["학년"] = cols[1].text_input("학년", auto_info_values.get("학년", "1학년"), key=f"auto_grade_{auto_info_signature[:8]}")
-        auto_info_values["학기"] = cols[2].text_input("학기", auto_info_values.get("학기", "1학기"), key=f"auto_semester_{auto_info_signature[:8]}")
-        auto_info_values["평가구분"] = cols[3].text_input("평가구분", auto_info_values.get("평가구분", "중간고사"), key=f"auto_eval_type_{auto_info_signature[:8]}")
-        auto_info_values["교과목"] = cols[4].text_input("교과목", auto_info_values.get("교과목", "과학"), key=f"auto_subject_{auto_info_signature[:8]}")
+        temp_auto_info_values["학년도"] = cols[0].text_input("학년도", temp_auto_info_values.get("학년도", "2026"), key=f"auto_year_{auto_info_key_suffix}")
+        temp_auto_info_values["학년"] = cols[1].text_input("학년", temp_auto_info_values.get("학년", "1학년"), key=f"auto_grade_{auto_info_key_suffix}")
+        temp_auto_info_values["학기"] = cols[2].text_input("학기", temp_auto_info_values.get("학기", "1학기"), key=f"auto_semester_{auto_info_key_suffix}")
+        temp_auto_info_values["평가구분"] = cols[3].text_input("평가구분", temp_auto_info_values.get("평가구분", "중간고사"), key=f"auto_eval_type_{auto_info_key_suffix}")
+        temp_auto_info_values["교과목"] = cols[4].text_input("교과목", temp_auto_info_values.get("교과목", "과학"), key=f"auto_subject_{auto_info_key_suffix}")
 
         cols = st.columns(4)
-        auto_info_values["선택형문항수"] = int(cols[0].number_input("선택형 문항 수", min_value=0, value=safe_int(auto_info_values.get("선택형문항수"), len(parsed.question_df)), step=1, key=f"auto_selected_q_count_{auto_info_signature[:8]}"))
-        auto_info_values["서답형문항수"] = int(cols[1].number_input("서답형 문항 수", min_value=0, value=safe_int(auto_info_values.get("서답형문항수"), 0), step=1, key=f"auto_written_q_count_{auto_info_signature[:8]}"))
-        auto_info_values["학생수"] = int(cols[2].number_input("학생 수", min_value=0, value=safe_int(auto_info_values.get("학생수"), len(parsed.students_df)), step=1, key=f"auto_student_count_{auto_info_signature[:8]}"))
-        auto_info_values["정오표파일수"] = int(cols[3].number_input("정오표 파일 수", min_value=0, value=safe_int(auto_info_values.get("정오표파일수"), len(answer_files)), step=1, key=f"auto_answer_file_count_{auto_info_signature[:8]}"))
+        temp_auto_info_values["선택형문항수"] = int(cols[0].number_input("선택형 문항 수", min_value=0, value=safe_int(temp_auto_info_values.get("선택형문항수"), len(parsed.question_df)), step=1, key=f"auto_selected_q_count_{auto_info_key_suffix}"))
+        temp_auto_info_values["서답형문항수"] = int(cols[1].number_input("서답형 문항 수", min_value=0, value=safe_int(temp_auto_info_values.get("서답형문항수"), 0), step=1, key=f"auto_written_q_count_{auto_info_key_suffix}"))
+        temp_auto_info_values["학생수"] = int(cols[2].number_input("학생 수", min_value=0, value=safe_int(temp_auto_info_values.get("학생수"), len(parsed.students_df)), step=1, key=f"auto_student_count_{auto_info_key_suffix}"))
+        temp_auto_info_values["정오표파일수"] = int(cols[3].number_input("정오표 파일 수", min_value=0, value=safe_int(temp_auto_info_values.get("정오표파일수"), len(answer_files)), step=1, key=f"auto_answer_file_count_{auto_info_key_suffix}"))
 
         cols = st.columns(3)
-        auto_info_values["선택형만점"] = float(cols[0].number_input("선택형 만점", min_value=0.0, value=safe_float(auto_info_values.get("선택형만점"), 0.0), step=1.0, key=f"auto_selected_full_score_{auto_info_signature[:8]}"))
-        auto_info_values["서답형만점"] = float(cols[1].number_input("서답형 만점", min_value=0.0, value=safe_float(auto_info_values.get("서답형만점"), 0.0), step=1.0, key=f"auto_written_full_score_{auto_info_signature[:8]}"))
-        auto_info_values["과목만점"] = float(cols[2].number_input("과목 만점", min_value=0.0, value=safe_float(auto_info_values.get("과목만점"), 0.0), step=1.0, key=f"auto_total_full_score_{auto_info_signature[:8]}"))
+        temp_auto_info_values["선택형만점"] = float(cols[0].number_input("선택형 만점", min_value=0.0, value=safe_float(temp_auto_info_values.get("선택형만점"), 0.0), step=1.0, key=f"auto_selected_full_score_{auto_info_key_suffix}"))
+        temp_auto_info_values["서답형만점"] = float(cols[1].number_input("서답형 만점", min_value=0.0, value=safe_float(temp_auto_info_values.get("서답형만점"), 0.0), step=1.0, key=f"auto_written_full_score_{auto_info_key_suffix}"))
+        temp_auto_info_values["과목만점"] = float(cols[2].number_input("과목 만점", min_value=0.0, value=safe_float(temp_auto_info_values.get("과목만점"), 0.0), step=1.0, key=f"auto_total_full_score_{auto_info_key_suffix}"))
 
-        if st.button("자동 인식값을 원본으로 되돌리기", key=f"reset_auto_info_{auto_info_signature[:8]}"):
-            st.session_state[auto_info_state_key] = default_auto_info_values()
+        btn_cols = st.columns([1, 1, 4])
+        if btn_cols[0].button("자동 인식값 수정 적용", key=f"apply_auto_info_{auto_info_key_suffix}"):
+            st.session_state[auto_info_state_key] = temp_auto_info_values.copy()
+            st.success("자동 인식값 수정 내용이 적용되었습니다.")
             st.rerun()
 
-    st.session_state[auto_info_state_key] = auto_info_values.copy()
+        if btn_cols[1].button("원본으로 되돌리기", key=f"reset_auto_info_{auto_info_key_suffix}"):
+            st.session_state[auto_info_state_key] = default_auto_info_values()
+            for widget_key in auto_info_widget_keys:
+                st.session_state.pop(widget_key, None)
+            st.rerun()
+
+    auto_info_values = {**default_auto_info_values(), **st.session_state.get(auto_info_state_key, {})}
     parsed.exam_info.update(auto_info_values)
 
     st.subheader("2. 문항정보 수정")
