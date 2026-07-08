@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.88
+성취수준별 평가결과 분석 웹앱 v1.89
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -87,6 +87,7 @@
 - v1.86: AI 분석 내부의 기본/고급 분석 전환을 탭에서 선택형 메뉴로 변경하여 기본 분석 선택 시 고급 분석 영역이 함께 펼쳐지는 현상 수정
 - v1.87: 원안지 기반 고급 분석 전용 프리셋이 확실히 표시되도록 상태키를 분리하고 프리셋 안내 문구를 보강
 - v1.88: 고급 분석에서 별도의 분석 범위 선택을 제거하고, 원안지 기반 고급 분석 프리셋 중심으로 실행되도록 단순화
+- v1.89: Word AI 분석 보고서의 평가 정보 영역을 공문서형 요약 표와 강조 박스 중심 양식으로 개선
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
@@ -122,7 +123,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.88"
+APP_VERSION = "v1.89"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1600,17 +1601,166 @@ def make_ai_report_docx(
     """AI 분석 결과를 평가정보가 포함된 Word 보고서 형태로 만든다."""
     try:
         from docx import Document
+        from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
         from docx.enum.text import WD_ALIGN_PARAGRAPH
-        from docx.shared import Pt, Inches
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.shared import Pt, Inches, RGBColor
     except Exception as e:
         raise RuntimeError("Word(.docx) 저장을 위해 python-docx가 필요합니다. requirements.txt에 python-docx를 추가하세요.") from e
 
+    def is_blank_value(v: Any) -> bool:
+        return v is None or str(v).strip() in ["", "nan", "None"]
+
+    def number_or_none(v: Any) -> Optional[float]:
+        try:
+            if v is None or str(v).strip() == "":
+                return None
+            n = float(v)
+            if math.isnan(n):
+                return None
+            return n
+        except Exception:
+            return None
+
+    def fmt_score(v: Any) -> str:
+        n = number_or_none(v)
+        if n is None:
+            return "" if is_blank_value(v) else str(v)
+        return f"{n:.1f}점"
+
+    def fmt_count(v: Any, unit: str) -> str:
+        n = number_or_none(v)
+        if n is None:
+            return "" if is_blank_value(v) else str(v)
+        return f"{int(round(n))}{unit}"
+
+    def fmt_raw(v: Any) -> str:
+        if is_blank_value(v):
+            return ""
+        return str(v)
+
+    def fmt_alpha(v: Any) -> str:
+        n = number_or_none(v)
+        if n is None:
+            return "" if is_blank_value(v) else str(v)
+        return f"{n:.3f}"
+
+    def set_cell_shading(cell: Any, fill: str) -> None:
+        tc_pr = cell._tc.get_or_add_tcPr()
+        shd = tc_pr.find(qn('w:shd'))
+        if shd is None:
+            shd = OxmlElement('w:shd')
+            tc_pr.append(shd)
+        shd.set(qn('w:fill'), fill)
+
+    def set_cell_border(cell: Any, color: str = "D0D7DE", size: str = "6") -> None:
+        tc = cell._tc
+        tc_pr = tc.get_or_add_tcPr()
+        borders = tc_pr.first_child_found_in("w:tcBorders")
+        if borders is None:
+            borders = OxmlElement('w:tcBorders')
+            tc_pr.append(borders)
+        for edge in ("top", "left", "bottom", "right"):
+            tag = 'w:{}'.format(edge)
+            element = borders.find(qn(tag))
+            if element is None:
+                element = OxmlElement(tag)
+                borders.append(element)
+            element.set(qn('w:val'), 'single')
+            element.set(qn('w:sz'), size)
+            element.set(qn('w:space'), '0')
+            element.set(qn('w:color'), color)
+
+    def set_cell_text(cell: Any, text_value: str, bold: bool = False, font_size: float = 9.5, color: str = "111827") -> None:
+        cell.text = ""
+        p = cell.paragraphs[0]
+        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.space_before = Pt(0)
+        r = p.add_run(str(text_value))
+        r.bold = bold
+        r.font.size = Pt(font_size)
+        r.font.name = "맑은 고딕"
+        r.font.color.rgb = RGBColor.from_string(color)
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+    def style_table_cells(table: Any) -> None:
+        for row in table.rows:
+            for cell in row.cells:
+                set_cell_border(cell)
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        run.font.name = "맑은 고딕"
+
+    def add_label_value_table(title_text: str, rows: List[Tuple[str, str]], cols_per_row: int = 2) -> None:
+        if not rows:
+            return
+        heading = doc.add_paragraph()
+        heading.paragraph_format.space_before = Pt(8)
+        heading.paragraph_format.space_after = Pt(4)
+        hr = heading.add_run(title_text)
+        hr.bold = True
+        hr.font.size = Pt(12)
+        hr.font.name = "맑은 고딕"
+        hr.font.color.rgb = RGBColor.from_string("1F2937")
+
+        pair_count = cols_per_row
+        table = doc.add_table(rows=0, cols=pair_count * 2)
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        table.style = "Table Grid"
+        col_widths = [Inches(1.15), Inches(2.0)] * pair_count
+        for idx, row_start in enumerate(range(0, len(rows), pair_count)):
+            row = table.add_row()
+            pair = rows[row_start:row_start + pair_count]
+            for col in range(pair_count):
+                label_cell = row.cells[col * 2]
+                value_cell = row.cells[col * 2 + 1]
+                if col < len(pair):
+                    label, value = pair[col]
+                    set_cell_text(label_cell, label, bold=True, font_size=9.0, color="374151")
+                    set_cell_text(value_cell, value, bold=False, font_size=9.0, color="111827")
+                    set_cell_shading(label_cell, "F3F4F6")
+                    set_cell_shading(value_cell, "FFFFFF")
+                else:
+                    set_cell_text(label_cell, "", font_size=9.0)
+                    set_cell_text(value_cell, "", font_size=9.0)
+                    set_cell_shading(label_cell, "FFFFFF")
+                    set_cell_shading(value_cell, "FFFFFF")
+                label_cell.width = col_widths[col * 2]
+                value_cell.width = col_widths[col * 2 + 1]
+        style_table_cells(table)
+
+    def add_box(title_text: str, body_text: str, fill: str = "F8FAFC", border: str = "CBD5E1") -> None:
+        if not str(body_text or "").strip():
+            return
+        table = doc.add_table(rows=1, cols=1)
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        table.style = "Table Grid"
+        cell = table.rows[0].cells[0]
+        set_cell_shading(cell, fill)
+        set_cell_border(cell, color=border, size="8")
+        cell.text = ""
+        p_title = cell.paragraphs[0]
+        p_title.paragraph_format.space_after = Pt(4)
+        r_title = p_title.add_run(title_text)
+        r_title.bold = True
+        r_title.font.size = Pt(11)
+        r_title.font.name = "맑은 고딕"
+        r_title.font.color.rgb = RGBColor.from_string("1F2937")
+        p_body = cell.add_paragraph()
+        p_body.paragraph_format.line_spacing = 1.15
+        p_body.paragraph_format.space_after = Pt(0)
+        r_body = p_body.add_run(str(body_text).strip())
+        r_body.font.size = Pt(9.5)
+        r_body.font.name = "맑은 고딕"
+        r_body.font.color.rgb = RGBColor.from_string("111827")
+
     doc = Document()
     section = doc.sections[0]
-    section.top_margin = Inches(0.7)
-    section.bottom_margin = Inches(0.7)
-    section.left_margin = Inches(0.8)
-    section.right_margin = Inches(0.8)
+    section.top_margin = Inches(0.65)
+    section.bottom_margin = Inches(0.65)
+    section.left_margin = Inches(0.75)
+    section.right_margin = Inches(0.75)
 
     styles = doc.styles
     styles["Normal"].font.name = "맑은 고딕"
@@ -1621,63 +1771,84 @@ def make_ai_report_docx(
 
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.space_after = Pt(4)
     run = title.add_run(report_title)
     run.bold = True
     run.font.size = Pt(18)
-
-    subtitle = doc.add_paragraph()
-    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    sub_run = subtitle.add_run(f"{report_type} · 생성일시 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    sub_run.font.size = Pt(9.5)
-
-    doc.add_paragraph()
-    doc.add_heading("평가 정보", level=1)
+    run.font.name = "맑은 고딕"
+    run.font.color.rgb = RGBColor.from_string("111827")
 
     exam = parsed.exam_info or {}
     achievement = analysis.get("achievement", pd.DataFrame())
     overall = achievement.iloc[0].to_dict() if isinstance(achievement, pd.DataFrame) and not achievement.empty else {}
     alpha = analysis.get("alpha")
 
-    info_rows = [
-        ("학년도", exam.get("학년도", "")),
-        ("학년", exam.get("학년", "")),
-        ("학기", exam.get("학기", "")),
-        ("평가구분", exam.get("평가구분", "")),
-        ("교과목", exam.get("교과목", "")),
-        ("선택형 만점", exam.get("선택형만점", "")),
-        ("서답형 만점", exam.get("서답형만점", "")),
-        ("과목 만점", exam.get("과목만점", "")),
-        ("선택형 문항 수", exam.get("선택형문항수", "")),
-        ("서답형 문항 수", exam.get("서답형문항수", "")),
-        ("응시자 수", overall.get("응시자수(명)", overall.get("응시자수", ""))),
-        ("전체 평균", overall.get("평균(점)", overall.get("평균", ""))),
-        ("표준편차", overall.get("표준편차", "")),
-        ("최고점", overall.get("최고점(점)", overall.get("최고점", ""))),
-        ("최저점", overall.get("최저점(점)", overall.get("최저점", ""))),
-        ("검사신뢰도 α", "" if alpha is None else round(float(alpha), 3)),
+    subtitle_parts = [
+        fmt_raw(exam.get("학년도", "")),
+        fmt_raw(exam.get("학년", "")),
+        fmt_raw(exam.get("학기", "")),
+        fmt_raw(exam.get("평가구분", "")),
+        fmt_raw(exam.get("교과목", "")),
     ]
-    info_rows = [(k, "" if v is None else str(v)) for k, v in info_rows if str(v) not in ["", "nan", "None"]]
+    subtitle_text = " ".join([p for p in subtitle_parts if p]).strip()
+    subtitle = doc.add_paragraph()
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    subtitle.paragraph_format.space_after = Pt(2)
+    sub_run = subtitle.add_run(subtitle_text if subtitle_text else report_type)
+    sub_run.font.size = Pt(10)
+    sub_run.font.name = "맑은 고딕"
+    sub_run.font.color.rgb = RGBColor.from_string("374151")
 
-    table = doc.add_table(rows=1, cols=2)
-    table.style = "Table Grid"
-    hdr = table.rows[0].cells
-    hdr[0].text = "항목"
-    hdr[1].text = "내용"
-    for key, val in info_rows:
-        cells = table.add_row().cells
-        cells[0].text = key
-        cells[1].text = val
+    generated = doc.add_paragraph()
+    generated.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    generated.paragraph_format.space_after = Pt(10)
+    gen_run = generated.add_run(f"{report_type} · 생성일시 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    gen_run.font.size = Pt(8.5)
+    gen_run.font.name = "맑은 고딕"
+    gen_run.font.color.rgb = RGBColor.from_string("6B7280")
+
+    doc.add_paragraph()
+
+    base_info_rows = [
+        ("학년도", fmt_raw(exam.get("학년도", ""))),
+        ("학년", fmt_raw(exam.get("학년", ""))),
+        ("학기", fmt_raw(exam.get("학기", ""))),
+        ("평가구분", fmt_raw(exam.get("평가구분", ""))),
+        ("교과목", fmt_raw(exam.get("교과목", ""))),
+        ("응시자 수", fmt_count(overall.get("응시자수(명)", overall.get("응시자수", "")), "명")),
+        ("과목 만점", fmt_score(exam.get("과목만점", ""))),
+        ("선택형 만점", fmt_score(exam.get("선택형만점", ""))),
+        ("서답형 만점", fmt_score(exam.get("서답형만점", ""))),
+        ("선택형 문항 수", fmt_count(exam.get("선택형문항수", ""), "문항")),
+        ("서답형 문항 수", fmt_count(exam.get("서답형문항수", ""), "문항")),
+    ]
+    base_info_rows = [(k, v) for k, v in base_info_rows if v]
+    add_label_value_table("평가 기본 정보", base_info_rows, cols_per_row=2)
+
+    summary_rows = [
+        ("전체 평균", fmt_score(overall.get("평균(점)", overall.get("평균", ""))),),
+        ("표준편차", fmt_score(overall.get("표준편차", ""))),
+        ("최고점", fmt_score(overall.get("최고점(점)", overall.get("최고점", ""))),),
+        ("최저점", fmt_score(overall.get("최저점(점)", overall.get("최저점", ""))),),
+        ("검사신뢰도 α", fmt_alpha(alpha)),
+    ]
+    summary_rows = [(k, v) for k, v in summary_rows if v]
+    add_label_value_table("전체 성취 요약", summary_rows, cols_per_row=2)
 
     focus_request = str(focus_request or "").strip()
     if focus_request:
         doc.add_paragraph()
-        doc.add_heading("중점 분석 요청", level=1)
-        p = doc.add_paragraph()
-        p.paragraph_format.line_spacing = 1.15
-        p.add_run(focus_request)
+        add_box("중점 분석 요청", focus_request, fill="F8FAFC", border="CBD5E1")
 
     doc.add_paragraph()
-    doc.add_heading("AI 분석 결과", level=1)
+    result_heading = doc.add_paragraph()
+    result_heading.paragraph_format.space_before = Pt(8)
+    result_heading.paragraph_format.space_after = Pt(6)
+    rr = result_heading.add_run("AI 분석 결과")
+    rr.bold = True
+    rr.font.size = Pt(13)
+    rr.font.name = "맑은 고딕"
+    rr.font.color.rgb = RGBColor.from_string("111827")
 
     def add_formatted_line(line: str) -> None:
         raw = line.rstrip()
@@ -1691,16 +1862,22 @@ def make_ai_report_docx(
             return
         if re.match(r"^\d+\.\s+", text) and len(text) <= 90:
             p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_after = Pt(2)
             r = p.add_run(text)
             r.bold = True
             r.font.size = Pt(12)
+            r.font.name = "맑은 고딕"
             return
         if text.startswith(('-', '•', '*')):
-            doc.add_paragraph(text.lstrip('-•* ').strip(), style='List Bullet')
+            p = doc.add_paragraph(text.lstrip('-•* ').strip(), style='List Bullet')
+            p.paragraph_format.space_after = Pt(1)
             return
         p = doc.add_paragraph()
         p.paragraph_format.line_spacing = 1.15
-        p.add_run(text)
+        p.paragraph_format.space_after = Pt(3)
+        r = p.add_run(text)
+        r.font.name = "맑은 고딕"
 
     for line in str(report_body).splitlines():
         add_formatted_line(line)
