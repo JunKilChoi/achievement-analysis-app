@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.76
+성취수준별 평가결과 분석 웹앱 v1.77
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -77,6 +77,7 @@
 - v1.74: 개별 반 성취수준 비교 그래프의 범례를 제거하고 문항별 분석의 난이도 비교 표 높이를 확대
 - v1.75: 학급별 문항 분석 표에서 정답률, 변별도, 학급간 최대차 열을 서로 다른 색으로 강조
 - v1.76: 학급별 문항 분석 표 강조 대상을 전체 정답률, 변별도, 학급간최대차 세 열로 한정하고 같은 색으로 통일
+- v1.77: 문항별 분석 표에서도 평가영역, 전체 정답률, 변별도 세 열을 같은 색으로 강조
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -1880,6 +1881,17 @@ def style_class_item_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler
     return df.style.apply(lambda _: styles, axis=None)
 
 
+def style_item_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    """문항별 분석에서 평가영역, 전체 정답률, 변별도 세 열만 같은 색으로 강조한다."""
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+    highlight_cols = {"평가영역", "★ 평가요소", "정답률", "정답률(%)", "전체 정답률", "전체 정답률(%)", "변별도", "변별도(%)"}
+    for col in df.columns:
+        name = str(col).strip()
+        if name in highlight_cols:
+            styles[col] = "background-color: #fff3cd; font-weight: 700;"
+    return df.style.apply(lambda _: styles, axis=None)
+
+
 def fmt_percent_df(df: pd.DataFrame, digits: int = 1) -> pd.DataFrame:
     """Streamlit 화면 표시용: 데이터에 %를 포함하고 헤더에 단위를 붙인다."""
     return format_output_df(df, digits=digits, add_units=True)
@@ -2832,7 +2844,8 @@ def main() -> None:
                 "함께 살펴볼 필요가 있습니다. 따라서 변별도는 정답률, 난이도, 선택지 반응, 평가 내용과 함께 "
                 "종합적으로 해석하는 것이 좋습니다."
             )
-            st.dataframe(fmt_percent_df(analysis["item"].sort_values("정답률")), use_container_width=True, height=760)
+            item_display = fmt_percent_df(analysis["item"].sort_values("정답률"))
+            st.dataframe(style_item_analysis_df(item_display), use_container_width=True, height=760, hide_index=True)
 
         st.markdown("#### 예상 난이도-실제 정답률 일치 여부")
 
