@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.46
+성취수준별 평가결과 분석 웹앱 v1.47
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -49,6 +49,7 @@
 - v1.44: 모든 AI 분석에 중점 분석 요청 입력 박스를 추가하고, 입력 시 기존 프롬프트 마지막에 평가 전문가 관점의 추가 분석 요청으로 반영
 - v1.45: 문항정보 수정표 편집값을 세션에 저장해 수정 내용이 분석에 확실히 반영되도록 하고, 평가요소 확인용 하이라이트 표 추가
 - v1.46: 문항정보 수정 단계에 평가요소를 구체적으로 수정하도록 안내하는 강조 문구 추가
+- v1.47: 문항정보 수정 단계의 평가요소 하이라이트 확인용 표 제거
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -80,7 +81,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.46"
+APP_VERSION = "v1.47"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1945,9 +1946,6 @@ def main() -> None:
     edited_question_df = normalize_question_editor_df(edited_question_df)
     st.session_state[editor_state_key] = edited_question_df.copy()
 
-    with st.expander("평가요소 하이라이트 확인", expanded=False):
-        st.caption("수정해야 할 핵심 열인 평가요소만 노란색으로 표시한 확인용 표입니다. 실제 수정은 위 표에서 합니다.")
-        st.dataframe(make_eval_area_highlight_df(edited_question_df), use_container_width=True, hide_index=True)
 
     # 편집값 정규화 후 전체 분석 데이터에 재반영
     parsed.question_df = edited_question_df.copy()
