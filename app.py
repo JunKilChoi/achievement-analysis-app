@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.51
+성취수준별 평가결과 분석 웹앱 v1.52
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -54,6 +54,7 @@
 - v1.49: 수정된 문항정보 요약과 성취기준-평가요소별 상세 구성 표를 줄바꿈형 표로 표시해 긴 셀 내용을 읽기 쉽게 개선
 - v1.50: 수정된 문항정보 요약을 표 대신 성취기준별 카드형 목록으로 재구성
 - v1.51: 성취기준별 카드형 요약에서 불필요한 “성취기준 1/2” 번호 제목을 제거하고 성취기준 내용을 바로 표시
+- v1.52: 문항정보 수정표를 적용 버튼 방식으로 변경하여 평가요소 수정값이 셀 편집 중간에 일부 반영되지 않는 문제를 안정화
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -86,7 +87,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.51"
+APP_VERSION = "v1.52"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1983,31 +1984,40 @@ def main() -> None:
 
     editable_question_df = normalize_question_editor_df(st.session_state[editor_state_key])
 
-    st.info("표에서 수정한 평가요소, 성취기준, 난이도, 배점, 정답은 아래 분석과 AI 분석에 바로 반영됩니다. 파일을 다시 올리거나 정오표 목록을 초기화하기 전까지 수정값이 유지됩니다.")
+    st.info("표에서 수정한 평가요소, 성취기준, 난이도, 배점, 정답은 아래 분석과 AI 분석에 반영됩니다. 수정 후에는 반드시 아래의 '문항정보 수정값 적용' 버튼을 눌러 주세요. 파일을 다시 올리거나 정오표 목록을 초기화하기 전까지 적용한 수정값이 유지됩니다.")
     st.warning("평가요소는 이후 평가영역별 분석과 AI 분석의 핵심 기준이 되므로, 문항정보표의 내용을 그대로 사용하기보다 반드시 문항의 실제 평가 내용을 반영하도록 수정해 주세요. 특히 평가영역이 단원명이나 큰 주제처럼 넓게 입력되어 있다면, 해당 문항이 실제로 평가하는 개념, 사고 과정, 자료 해석 능력, 적용 상황 등이 드러나도록 구체적으로 보완해야 합니다. 평가요소가 자세할수록 문항별 정답률, 오답 경향, 성취수준별 차이를 더 정확하고 의미 있게 해석할 수 있습니다.")
 
-    edited_question_df = st.data_editor(
-        editable_question_df,
-        use_container_width=True,
-        height=360,
-        hide_index=True,
-        key=f"question_info_editor_{editor_signature[:12]}",
-        disabled=["문항번호"],
-        column_order=["문항번호", "평가영역", "성취기준", "난이도", "배점", "정답"],
-        column_config={
-            "문항번호": st.column_config.NumberColumn("문항번호", step=1, disabled=True),
-            "평가영역": st.column_config.TextColumn("★ 평가요소", help="분석에 사용할 평가영역/평가요소명을 구체적으로 수정할 수 있습니다."),
-            "성취기준": st.column_config.TextColumn("성취기준", width="large", help="AI 해석과 평가영역별 분석에 반영됩니다."),
-            "난이도": st.column_config.SelectboxColumn("난이도", options=["", "어려움", "보통", "쉬움"]),
-            "배점": st.column_config.NumberColumn("배점", step=0.1, format="%.2f"),
-            "정답": st.column_config.TextColumn("정답"),
-        },
-    )
+    with st.form(key=f"question_info_editor_form_{editor_signature[:12]}", clear_on_submit=False):
+        edited_question_df = st.data_editor(
+            editable_question_df,
+            use_container_width=True,
+            height=360,
+            hide_index=True,
+            key=f"question_info_editor_{editor_signature[:12]}",
+            disabled=["문항번호"],
+            column_order=["문항번호", "평가영역", "성취기준", "난이도", "배점", "정답"],
+            column_config={
+                "문항번호": st.column_config.NumberColumn("문항번호", step=1, disabled=True),
+                "평가영역": st.column_config.TextColumn("★ 평가요소", help="분석에 사용할 평가영역/평가요소명을 구체적으로 수정할 수 있습니다."),
+                "성취기준": st.column_config.TextColumn("성취기준", width="large", help="AI 해석과 평가영역별 분석에 반영됩니다."),
+                "난이도": st.column_config.SelectboxColumn("난이도", options=["", "어려움", "보통", "쉬움"]),
+                "배점": st.column_config.NumberColumn("배점", step=0.1, format="%.2f"),
+                "정답": st.column_config.TextColumn("정답"),
+            },
+        )
+        apply_question_edits = st.form_submit_button("문항정보 수정값 적용", type="primary")
 
-    # st.data_editor의 반환값을 세션에 다시 저장해 다음 rerun에서도 수정값이 사라지지 않게 합니다.
-    edited_question_df = normalize_question_editor_df(edited_question_df)
-    st.session_state[editor_state_key] = edited_question_df.copy()
+    if apply_question_edits:
+        edited_question_df = normalize_question_editor_df(edited_question_df)
+        st.session_state[editor_state_key] = edited_question_df.copy()
+        st.session_state["question_info_editor_applied_at"] = datetime.now().strftime("%H:%M:%S")
+        st.success("문항정보 수정값을 적용했습니다. 아래 요약과 분석 결과에 적용된 값이 반영됩니다.")
+    else:
+        edited_question_df = normalize_question_editor_df(st.session_state[editor_state_key])
 
+    applied_at = st.session_state.get("question_info_editor_applied_at")
+    if applied_at:
+        st.caption(f"마지막 적용 시각: {applied_at}")
 
     # 편집값 정규화 후 전체 분석 데이터에 재반영
     parsed.question_df = edited_question_df.copy()
