@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.59
+성취수준별 평가결과 분석 웹앱 v1.60
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -61,6 +61,7 @@
 - v1.56: 문항정보 수정 영역에서 문항 추가 버튼을 적용 버튼 옆으로 이동하고 선택 문항 삭제 버튼을 삭제 체크 열 하단으로 배치
 - v1.57: 문항정보 수정 영역의 문항정보 수정값 적용, 문항 추가, 선택 문항 삭제 버튼을 한 줄에 나란히 배치
 - v1.59: 평가정보 자동 인식값 수정 영역을 즉시 반영 방식에서 적용 버튼 방식으로 변경
+- v1.60: 1~4단계 대분류를 시각적으로 더 뚜렷하게 구분하는 단계형 헤더와 설명 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
@@ -94,7 +95,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.59"
+APP_VERSION = "v1.60"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1893,6 +1894,70 @@ def main() -> None:
             "5. 필요한 경우 OpenAI API 키를 입력해 전체/개별 학생 AI 분석 초안을 생성합니다."
         )
 
+    st.markdown(
+        """
+        <style>
+        .big-step-header {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin: 34px 0 16px 0;
+            padding: 18px 20px;
+            border: 1px solid #d1d5db;
+            border-left: 8px solid #374151;
+            border-radius: 14px;
+            background: linear-gradient(90deg, #f3f4f6 0%, #ffffff 100%);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        }
+        .big-step-badge {
+            min-width: 44px;
+            height: 44px;
+            border-radius: 999px;
+            background: #374151;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            font-weight: 800;
+        }
+        .big-step-title {
+            font-size: 1.45rem;
+            font-weight: 800;
+            color: #111827;
+            line-height: 1.25;
+        }
+        .big-step-desc {
+            margin-top: 4px;
+            font-size: 0.95rem;
+            color: #4b5563;
+            line-height: 1.45;
+        }
+        .big-section-gap {
+            height: 10px;
+            border-top: 1px dashed #d1d5db;
+            margin: 28px 0 8px 0;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    def render_step_header(step_no: str, title: str, desc: str = "") -> None:
+        desc_html = f"<div class='big-step-desc'>{html.escape(desc)}</div>" if desc else ""
+        st.markdown(
+            f"""
+            <div class="big-step-header">
+                <div class="big-step-badge">{html.escape(step_no)}</div>
+                <div>
+                    <div class="big-step-title">{html.escape(title)}</div>
+                    {desc_html}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     if "answer_file_store" not in st.session_state:
         st.session_state.answer_file_store = {}
 
@@ -2024,7 +2089,7 @@ def main() -> None:
     auto_info_values = {**default_auto_info_values(), **st.session_state.get(auto_info_state_key, {})}
     parsed.exam_info.update(auto_info_values)
 
-    st.subheader("1. 자동 인식 결과")
+    render_step_header("1", "자동 인식 결과", "업로드한 문항정보표와 학생답 정오표에서 인식한 평가 정보를 확인하고, 필요한 값은 적용 버튼으로 수정합니다.")
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("교과목", parsed.exam_info.get("교과목", "-"))
     m2.metric("학년/학기", f"{parsed.exam_info.get('학년', '-')}/{parsed.exam_info.get('학기', '-')}")
@@ -2091,7 +2156,7 @@ def main() -> None:
     auto_info_values = {**default_auto_info_values(), **st.session_state.get(auto_info_state_key, {})}
     parsed.exam_info.update(auto_info_values)
 
-    st.subheader("2. 문항정보 수정")
+    render_step_header("2", "문항정보 수정", "문항별 평가요소, 성취기준, 난이도, 배점, 정답을 실제 분석 목적에 맞게 보정합니다.")
     st.caption("나이스 문항정보표에서 자동 인식한 값입니다. 평가 후 분석 자료를 더 구체화하려면 평가영역, 성취기준, 난이도 등을 여기서 수정하세요. 수정한 값은 아래 분석 결과, 확인용 엑셀, 5종 분석 엑셀, AI 분석에 모두 반영됩니다.")
 
     editor_signature = make_question_editor_signature(question_file, answer_files)
@@ -2342,7 +2407,7 @@ def main() -> None:
             for idx, (standard, group) in enumerate(q_summary.groupby("성취기준", dropna=False, sort=False), start=1):
                 render_standard_card(str(standard), group, idx)
 
-    st.subheader("3. 분석 기준")
+    render_step_header("3", "분석 기준 및 결과 확인", "성취수준 분할점수를 설정한 뒤, 탭별 분석 결과와 AI 분석을 확인합니다.")
     st.caption("선택형 만점, 서답형 만점, 과목 만점은 1. 자동 인식 결과의 '평가정보 자동 인식값 수정'에서 조정할 수 있습니다.")
     parsed.exam_info["선택형만점"] = safe_float(parsed.exam_info.get("선택형만점"), safe_float(parsed.question_df["배점"].fillna(0).sum() if "배점" in parsed.question_df.columns else 0.0, 0.0))
     parsed.exam_info["서답형만점"] = safe_float(parsed.exam_info.get("서답형만점"), 0.0)
@@ -3035,7 +3100,8 @@ def main() -> None:
                         key="download_advanced_ai_docx_persisted",
                     )
 
-    st.subheader("4. 다운로드")
+    st.markdown("<div class='big-section-gap'></div>", unsafe_allow_html=True)
+    render_step_header("4", "다운로드", "확인용 입력자료와 5종 분석 결과를 엑셀 파일로 내려받습니다.")
     d1, d2 = st.columns(2)
     confirm_bytes = make_confirm_excel(parsed, analysis)
     zip_bytes = make_analysis_zip(parsed, analysis)
