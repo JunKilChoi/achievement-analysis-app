@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.65
+성취수준별 평가결과 분석 웹앱 v1.66
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -66,6 +66,7 @@
 - v1.62: 성취도 분석 표 아래에 표준편차의 의미와 만점 대비 표준편차 비율 기준 해석 안내 문구 추가
 - v1.63: 성취도 분석의 표준편차 해석 안내를 다른 부연 설명과 비슷한 간결한 안내 박스 형태로 조정
 - v1.64: 성취도 분석 탭에서 전체 분석 그래프와 개별 반 분석 그래프를 각각 카드형 영역으로 분리하고, 전체/개별 반 성취수준별 비율 표를 그래프 아래에 나란히 표시
+- v1.66: 학급별 문항 분석 탭에 학급 간 정답률 차이, 학급별 취약 문항 TOP 5, 문항 선택형 학급별 선택지 반응 비교 추가
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -100,7 +101,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.65"
+APP_VERSION = "v1.66"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2870,9 +2871,95 @@ def main() -> None:
     with tab3:
         with st.container(border=True):
             st.markdown("#### 학급별 문항 분석")
-            st.dataframe(fmt_percent_df(analysis["class_item_pivot"]), use_container_width=True, height=520)
+            st.markdown(
+                "문항별 전체 정답률과 학급별 정답률을 함께 확인합니다. "
+                "특히 학급 간 정답률 차이를 보면 특정 반에서 유독 어려워한 문항을 찾을 수 있습니다."
+            )
+
+            class_item_pivot = analysis["class_item_pivot"].copy()
+            item_meta_cols = [c for c in ["문항번호", "평가영역", "성취기준", "난이도", "배점", "정답", "정답률", "변별도"] if c in analysis["item"].columns]
+            class_item_view = analysis["item"][item_meta_cols].merge(class_item_pivot, on="문항번호", how="left")
+            class_rate_cols = [c for c in class_item_view.columns if str(c).endswith("반_정답률") or str(c) == "미상반_정답률"]
+            if class_rate_cols:
+                class_item_view["학급간최대차"] = class_item_view[class_rate_cols].max(axis=1) - class_item_view[class_rate_cols].min(axis=1)
+            st.dataframe(fmt_percent_df(class_item_view.sort_values("정답률")), use_container_width=True, height=520, hide_index=True)
+
         with st.container(border=True):
-            st.markdown("#### 긴 형태 데이터")
+            st.markdown("#### 학급 간 정답률 차이가 큰 문항")
+            st.markdown("학급별 정답률의 최고값과 최저값 차이가 큰 문항을 먼저 보여줍니다. 학급별 수업 흐름, 활동 경험, 오개념 차이를 확인할 때 유용합니다.")
+            gap_rows = []
+            if class_rate_cols:
+                for _, row in class_item_view.iterrows():
+                    rates = row[class_rate_cols].dropna()
+                    if rates.empty:
+                        continue
+                    max_col = rates.idxmax()
+                    min_col = rates.idxmin()
+                    gap_rows.append({
+                        "문항번호": row.get("문항번호", ""),
+                        "평가영역": row.get("평가영역", ""),
+                        "성취기준": row.get("성취기준", ""),
+                        "난이도": row.get("난이도", ""),
+                        "전체정답률": row.get("정답률", np.nan),
+                        "최고학급": str(max_col).replace("_정답률", ""),
+                        "최고정답률": rates[max_col],
+                        "최저학급": str(min_col).replace("_정답률", ""),
+                        "최저정답률": rates[min_col],
+                        "학급간차이": rates[max_col] - rates[min_col],
+                    })
+            gap_df = pd.DataFrame(gap_rows)
+            if not gap_df.empty:
+                st.dataframe(fmt_percent_df(gap_df.sort_values("학급간차이", ascending=False)), use_container_width=True, height=360, hide_index=True)
+            else:
+                st.info("학급 간 정답률 차이를 계산할 데이터가 없습니다.")
+
+        with st.container(border=True):
+            st.markdown("#### 학급별 취약 문항 TOP 5")
+            st.markdown("각 학급에서 정답률이 낮은 문항을 순서대로 보여줍니다. 전체적으로 어려운 문항과 특정 학급에서만 어려운 문항을 구분해 볼 수 있습니다.")
+            weak_base = analysis["class_item"].merge(
+                analysis["item"][[c for c in ["문항번호", "평가영역", "성취기준", "난이도", "배점", "정답", "정답률"] if c in analysis["item"].columns]],
+                on="문항번호",
+                how="left",
+                suffixes=("_학급", "_전체"),
+            )
+            weak_rows = []
+            for class_value, group in weak_base.groupby("반", dropna=False):
+                g = group.sort_values(["정답률_학급", "문항번호"], ascending=[True, True]).head(5).copy()
+                for rank, (_, row) in enumerate(g.iterrows(), start=1):
+                    weak_rows.append({
+                        "반": class_value,
+                        "순위": rank,
+                        "문항번호": row.get("문항번호", ""),
+                        "학급정답률": row.get("정답률_학급", np.nan),
+                        "전체정답률": row.get("정답률_전체", np.nan),
+                        "평가영역": row.get("평가영역", ""),
+                        "난이도": row.get("난이도", ""),
+                        "성취기준": row.get("성취기준", ""),
+                    })
+            weak_df = pd.DataFrame(weak_rows)
+            if not weak_df.empty:
+                st.dataframe(fmt_percent_df(weak_df), use_container_width=True, height=360, hide_index=True)
+            else:
+                st.info("학급별 취약 문항을 계산할 데이터가 없습니다.")
+
+        with st.container(border=True):
+            st.markdown("#### 문항 선택형 학급별 선택지 반응 비교")
+            st.markdown("문항을 하나 선택하면, 각 학급 학생들이 어떤 선택지에 응답했는지 비교할 수 있습니다. 같은 문항을 틀렸더라도 학급별 오답 경향이 다를 수 있습니다.")
+            item_options = sorted(pd.to_numeric(analysis["long"]["문항번호"], errors="coerce").dropna().astype(int).unique().tolist())
+            if item_options:
+                selected_class_item = st.selectbox("선택지 반응을 비교할 문항", item_options, key="class_option_response_item")
+                one_item = analysis["long"][pd.to_numeric(analysis["long"]["문항번호"], errors="coerce") == selected_class_item].copy()
+                one_item["선택지"] = one_item["선택지"].fillna("무표기").astype(str).replace({"": "무표기", "nan": "무표기"})
+                response = one_item.groupby(["반", "선택지"], dropna=False).agg(응답자수=("반/번호", "count")).reset_index()
+                total_by_class = one_item.groupby("반", dropna=False)["반/번호"].count().reset_index(name="학급응시자수")
+                response = response.merge(total_by_class, on="반", how="left")
+                response["응답비율"] = np.where(response["학급응시자수"] > 0, response["응답자수"] / response["학급응시자수"], np.nan)
+                response_view = response.sort_values(["반", "선택지"])
+                st.dataframe(fmt_percent_df(response_view), use_container_width=True, height=320, hide_index=True)
+            else:
+                st.info("선택할 문항 데이터가 없습니다.")
+
+        with st.expander("학급별 문항 분석 원자료 보기", expanded=False):
             st.dataframe(fmt_percent_df(analysis["class_item"]), use_container_width=True, height=320)
 
     with tab4:
