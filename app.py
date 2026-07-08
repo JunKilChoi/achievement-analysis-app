@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.61
+성취수준별 평가결과 분석 웹앱 v1.62
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -63,6 +63,7 @@
 - v1.59: 평가정보 자동 인식값 수정 영역을 즉시 반영 방식에서 적용 버튼 방식으로 변경
 - v1.60: 1~4단계 대분류를 시각적으로 더 뚜렷하게 구분하는 단계형 헤더와 설명 문구 추가
 - v1.61: 1~4단계 사이에 은은하지만 명확한 가로 구분선을 추가하여 단계 전환을 시각적으로 분리
+- v1.62: 성취도 분석 표 아래에 표준편차의 의미와 만점 대비 표준편차 비율 기준 해석 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
@@ -96,7 +97,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.61"
+APP_VERSION = "v1.62"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2456,6 +2457,30 @@ def main() -> None:
             a3.metric("최고/최저(점)", f"{analysis['achievement'].loc[0, '최고점']:.1f} / {analysis['achievement'].loc[0, '최저점']:.1f}")
             a4.metric("검사신뢰도 α", "-" if alpha is None else f"{alpha:.3f}")
             st.dataframe(fmt_percent_df(analysis["achievement"]), use_container_width=True)
+
+            achievement_std = safe_float(analysis["achievement"].loc[0, "표준편차"], 0.0)
+            std_ratio = (achievement_std / total_full_score * 100) if total_full_score else 0.0
+            st.markdown(
+                f"""
+                <div style="margin-top:14px; padding:16px 18px; border:1px solid #d1d5db; border-left:6px solid #6b7280; border-radius:12px; background:#f9fafb; line-height:1.65;">
+                    <div style="font-weight:800; color:#111827; margin-bottom:6px;">표준편차 해석 안내</div>
+                    <div style="color:#374151;">
+                        표준편차는 학생들의 점수가 평균을 중심으로 얼마나 흩어져 있는지를 보여주는 값입니다.
+                        표준편차가 작으면 학생들의 점수가 평균 근처에 모여 있어 성취 차이가 비교적 작다는 뜻이고,
+                        표준편차가 크면 고득점 학생과 저득점 학생의 차이가 커서 학습 격차가 크다는 뜻입니다.
+                    </div>
+                    <div style="color:#374151; margin-top:8px;">
+                        다만 표준편차는 시험 만점과 점수 범위의 영향을 받으므로, 단순히 몇 점 이상이면 크다고 해석하기보다는
+                        <b>만점 대비 표준편차의 비율</b>을 함께 보는 것이 좋습니다.
+                        현재 표준편차는 만점 대비 <b>{std_ratio:.1f}%</b>입니다.
+                        참고로 표준편차가 만점의 10% 이하이면 점수 분포가 비교적 좁은 편, 10~20% 정도이면 어느 정도 차이가 있는 편,
+                        20% 이상이면 학생 간 점수 차이가 큰 편으로 볼 수 있습니다.
+                        최종 해석은 평균 점수, 성취수준 분포, 문항별 정답률과 함께 판단하는 것이 좋습니다.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         graph_col1, graph_col2 = st.columns(2)
 
