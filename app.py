@@ -59,6 +59,7 @@
 - v1.54: 문항번호 입력칸의 +/- 버튼을 제거하고 헤더 중앙 정렬 및 문항 삭제 후 검증 오류 방지 처리
 - v1.55: 문항정보표 업로드 파일을 제거하면 문항정보 수정 세션을 초기화하여 같은 파일을 다시 올릴 때 원본 문항정보를 다시 읽도록 수정
 - v1.56: 문항정보 수정 영역에서 문항 추가 버튼을 적용 버튼 옆으로 이동하고 선택 문항 삭제 버튼을 삭제 체크 열 하단으로 배치
+- v1.57: 문항정보 수정 영역의 문항정보 수정값 적용, 문항 추가, 선택 문항 삭제 버튼을 한 줄에 나란히 배치
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -91,7 +92,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.56"
+APP_VERSION = "v1.57"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2020,7 +2021,7 @@ def main() -> None:
 
     st.info("가로 입력칸에서 수정한 평가요소, 성취기준, 난이도, 배점, 정답은 아래 분석과 AI 분석에 반영됩니다. 수정 후에는 반드시 아래의 '문항정보 수정값 적용' 버튼을 눌러 주세요. 파일을 다시 올리거나 정오표 목록을 초기화하기 전까지 적용한 수정값이 유지됩니다.")
     st.warning("평가요소는 이후 평가영역별 분석과 AI 분석의 핵심 기준이 되므로, 문항정보표의 내용을 그대로 사용하기보다 반드시 문항의 실제 평가 내용을 반영하도록 수정해 주세요. 특히 평가영역이 단원명이나 큰 주제처럼 넓게 입력되어 있다면, 해당 문항이 실제로 평가하는 개념, 사고 과정, 자료 해석 능력, 적용 상황 등이 드러나도록 구체적으로 보완해야 합니다. 평가요소가 자세할수록 문항별 정답률, 오답 경향, 성취수준별 차이를 더 정확하고 의미 있게 해석할 수 있습니다.")
-    st.caption("문항이 잘못 인식되었거나 누락된 경우 아래의 '+ 문항 추가'를 사용하고, 삭제할 문항은 오른쪽 삭제 칸을 체크한 뒤 삭제 열 하단의 '선택 문항 삭제'를 누르세요.")
+    st.caption("문항이 잘못 인식되었거나 누락된 경우 아래의 '+ 문항 추가'를 사용하고, 삭제할 문항은 오른쪽 삭제 칸을 체크한 뒤 하단의 '선택 문항 삭제'를 누르세요.")
 
     editable_question_df = normalize_question_editor_df(st.session_state[editor_state_key])
     if "_row_id" not in editable_question_df.columns:
@@ -2050,12 +2051,10 @@ def main() -> None:
             delete_row = c7.checkbox("삭제", value=False, key=f"del_{editor_signature[:8]}_{row_id}", label_visibility="collapsed")
             edited_rows.append({"문항번호": q_no, "평가영역": eval_area, "성취기준": standard, "난이도": difficulty, "배점": score, "정답": answer, "_row_id": row_id, "삭제": delete_row})
 
-        delete_button_cols = st.columns([0.75, 2.4, 2.4, 0.9, 0.8, 0.9, 0.55])
-        delete_question_rows = delete_button_cols[6].form_submit_button("선택 문항 삭제", use_container_width=True)
-
-        action_cols = st.columns([1.4, 1.0, 4.3])
+        action_cols = st.columns([1.4, 1.0, 1.2, 3.1])
         apply_question_edits = action_cols[0].form_submit_button("문항정보 수정값 적용", type="primary", use_container_width=True)
         add_question_row = action_cols[1].form_submit_button("+ 문항 추가", use_container_width=True)
+        delete_question_rows = action_cols[2].form_submit_button("선택 문항 삭제", use_container_width=True)
 
     if apply_question_edits or delete_question_rows or add_question_row:
         edited_question_df = pd.DataFrame(edited_rows)
