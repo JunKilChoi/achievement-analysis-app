@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.53
+성취수준별 평가결과 분석 웹앱 v1.54
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -56,6 +56,7 @@
 - v1.51: 성취기준별 카드형 요약에서 불필요한 “성취기준 1/2” 번호 제목을 제거하고 성취기준 내용을 바로 표시
 - v1.52: 문항정보 수정표를 적용 버튼 방식으로 변경하여 평가요소 수정값이 셀 편집 중간에 일부 반영되지 않는 문제를 안정화
 - v1.53: 문항정보 수정 방식을 표형 data_editor에서 문항별 가로 입력칸 방식으로 변경하고 문항 추가/삭제 기능 추가
+- v1.54: 문항번호 입력칸의 +/- 버튼을 제거하고 헤더 중앙 정렬 및 문항 삭제 후 검증 오류 방지 처리
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -88,7 +89,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.53"
+APP_VERSION = "v1.54"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -117,6 +118,11 @@ class ParsedData:
 def clean_text(v: Any) -> str:
     if v is None:
         return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except Exception:
+        pass
     text = str(v).replace("\u3000", " ").strip()
     text = re.sub(r"\s+", " ", text)
     return text
@@ -238,12 +244,23 @@ def is_correct_mark(raw: Any, correct_answer: Any) -> bool:
 
 
 def answers_match(a: Any, b: Any) -> bool:
-    """문항정보표 정답과 정오표 정답 검증용 비교."""
-    a_choices = parse_choice_set(a)
-    b_choices = parse_choice_set(b)
-    if a_choices or b_choices:
-        return a_choices == b_choices
-    return normalize_answer_value(a) == normalize_answer_value(b)
+    """문항정보표 정답과 정오표 정답 검증용 비교.
+
+    사용자가 문항을 삭제하거나 정답 칸을 비워 둔 경우처럼 한쪽 값이 없는 행도
+    검증표에서 확인 필요로 표시하되 앱 오류로 중단되지 않도록 안전하게 비교한다.
+    """
+    try:
+        a_text = clean_text(a)
+        b_text = clean_text(b)
+        if a_text == "" or b_text == "":
+            return False
+        a_choices = parse_choice_set(a_text)
+        b_choices = parse_choice_set(b_text)
+        if a_choices or b_choices:
+            return a_choices == b_choices
+        return normalize_answer_value(a_text) == normalize_answer_value(b_text)
+    except Exception:
+        return False
 
 
 def is_question_no(v: Any) -> bool:
@@ -2012,14 +2029,16 @@ def main() -> None:
     header_cols = st.columns([0.75, 2.4, 2.4, 0.9, 0.8, 0.9, 0.55])
     headers = ["문항", "★ 평가요소", "성취기준", "난이도", "배점", "정답", "삭제"]
     for col, label in zip(header_cols, headers):
-        col.markdown(f"**{label}**")
+        col.markdown(f"<div style='text-align:center; font-weight:700;'>{label}</div>", unsafe_allow_html=True)
 
     edited_rows: List[Dict[str, Any]] = []
     with st.form(key=f"question_info_editor_form_{editor_signature[:12]}", clear_on_submit=False):
         for idx, row in editable_question_df.reset_index(drop=True).iterrows():
             row_id = str(row.get("_row_id", f"row_{idx}"))
             c1, c2, c3, c4, c5, c6, c7 = st.columns([0.75, 2.4, 2.4, 0.9, 0.8, 0.9, 0.55])
-            q_no = c1.number_input("문항번호", min_value=1, step=1, value=int(pd.to_numeric(row.get("문항번호", idx + 1), errors="coerce") or idx + 1), key=f"qno_{editor_signature[:8]}_{row_id}", label_visibility="collapsed")
+            qno_default = int(pd.to_numeric(row.get("문항번호", idx + 1), errors="coerce") or idx + 1)
+            q_no_text = c1.text_input("문항번호", value=str(qno_default), key=f"qno_{editor_signature[:8]}_{row_id}", label_visibility="collapsed", placeholder="번호")
+            q_no = int(pd.to_numeric(q_no_text, errors="coerce") or 0)
             eval_area = c2.text_input("평가요소", value=str(row.get("평가영역", "")), key=f"eval_{editor_signature[:8]}_{row_id}", label_visibility="collapsed", placeholder="문항의 실제 평가 내용을 구체적으로 입력")
             standard = c3.text_input("성취기준", value=str(row.get("성취기준", "")), key=f"std_{editor_signature[:8]}_{row_id}", label_visibility="collapsed")
             diff_value = str(row.get("난이도", ""))
@@ -2040,6 +2059,11 @@ def main() -> None:
         if delete_question_rows:
             edited_question_df = edited_question_df[~edited_question_df["삭제"]].copy()
         edited_question_df = edited_question_df.drop(columns=["삭제"], errors="ignore")
+        edited_question_df["문항번호"] = pd.to_numeric(edited_question_df["문항번호"], errors="coerce")
+        edited_question_df = edited_question_df[edited_question_df["문항번호"].notna() & (edited_question_df["문항번호"] > 0)].copy()
+        if edited_question_df.empty:
+            st.error("적용할 문항이 없습니다. 최소 1개 이상의 문항을 남겨 주세요.")
+            st.stop()
         edited_question_df = normalize_question_editor_df(edited_question_df)
         if "_row_id" not in edited_question_df.columns:
             edited_question_df["_row_id"] = [f"q_{i}_{int(num)}" for i, num in enumerate(edited_question_df["문항번호"].tolist())]
