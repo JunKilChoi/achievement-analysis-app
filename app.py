@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.69
+성취수준별 평가결과 분석 웹앱 v1.70
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -70,6 +70,7 @@
 - v1.67: 분석 결과 영역의 메인 탭을 한 번에 하나만 렌더링하는 선택형 메뉴로 변경하여 드롭박스 변경 후 탭 내용이 한 페이지에 펼쳐지는 현상 방지
 - v1.68: 학급별 문항 분석에서 취약 문항 TOP 5, 선택지 반응 비교, 원자료 보기를 제거하고 핵심 표 중심으로 정리
 - v1.69: 학급별 문항 분석 표의 기본 정렬을 정답률 낮은 순에서 문항번호 순으로 변경
+- v1.70: 평가영역별 분석의 표 높이를 확대하고 환산점수 의미 안내 문구를 추가
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
 - v1.58: 자동 인식 결과에 표시되는 교과목, 학년/학기, 문항수, 학생수, 정오표 파일 수, 만점 정보를 자동 인식값 수정에서 모두 수정할 수 있도록 확장
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
@@ -104,7 +105,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.69"
+APP_VERSION = "v1.70"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2928,14 +2929,18 @@ def main() -> None:
     elif selected_analysis_tab == "평가영역별 분석":
         with st.container(border=True):
             st.markdown("#### 평가영역별 분석")
-            st.dataframe(fmt_percent_df(analysis["domain"].sort_values("정답률")), use_container_width=True, height=420)
+            st.info(
+                "환산점수는 각 평가영역에서 얻은 점수를 100점 만점 기준으로 바꾸어 표시한 값입니다. "
+                "서로 배점이 다른 평가영역을 같은 기준에서 비교하기 위한 값이며, 이미 해당 시험의 만점이 100점인 경우에는 원점수와 같은 값으로 표시됩니다."
+            )
+            st.dataframe(fmt_percent_df(analysis["domain"].sort_values("정답률")), use_container_width=True, height=620)
         with st.container(border=True):
             st.markdown("#### 개인별 평가영역 분석")
             selected_student_domain = render_student_selector(analysis["individual"], "domain_individual")
             if selected_student_domain:
                 domain_one = analysis["domain_scores"][analysis["domain_scores"]["반/번호"] == selected_student_domain].copy()
                 domain_cols = [c for c in ["평가영역", "영역점수", "영역배점", "영역환산점수", "영역정답률"] if c in domain_one.columns]
-                st.dataframe(fmt_percent_df(domain_one[domain_cols].sort_values("평가영역")), use_container_width=True, height=260, hide_index=True)
+                st.dataframe(fmt_percent_df(domain_one[domain_cols].sort_values("평가영역")), use_container_width=True, height=520, hide_index=True)
 
     elif selected_analysis_tab == "성취기준별 분석":
         with st.container(border=True):
