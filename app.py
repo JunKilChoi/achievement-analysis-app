@@ -50,6 +50,7 @@
 - v1.45: 문항정보 수정표 편집값을 세션에 저장해 수정 내용이 분석에 확실히 반영되도록 하고, 평가요소 확인용 하이라이트 표 추가
 - v1.46: 문항정보 수정 단계에 평가요소를 구체적으로 수정하도록 안내하는 강조 문구 추가
 - v1.47: 문항정보 수정 단계의 평가요소 하이라이트 확인용 표 제거
+- v1.48: 수정된 문항정보 요약을 성취기준별 평가요소·난이도·총점 구조로 재정리
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -81,7 +82,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.47"
+APP_VERSION = "v1.48"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1956,11 +1957,58 @@ def main() -> None:
     parsed.validation_df = make_validation(parsed.question_df, parsed.answer_key_df)
 
     with st.expander("수정된 문항정보 요약", expanded=False):
-        summary_df = parsed.question_df.groupby("평가영역", dropna=False).agg(
-            문항수=("문항번호", "count"),
-            배점합계=("배점", "sum"),
-        ).reset_index()
-        st.dataframe(format_output_df(summary_df), use_container_width=True, hide_index=True)
+        st.caption("성취기준별로 어떤 평가요소가 포함되어 있는지, 각 평가요소의 난이도와 배점이 어떻게 배치되어 있는지 확인할 수 있습니다. 평가요소를 수정한 뒤 이 표를 보며 특정 성취기준 안에서 평가 내용이 충분히 구체적으로 구분되는지 점검하세요.")
+
+        q_summary = parsed.question_df.copy()
+        q_summary["성취기준"] = q_summary.get("성취기준", "").fillna("").astype(str).str.strip().replace("", "미입력")
+        q_summary["평가영역"] = q_summary.get("평가영역", "").fillna("").astype(str).str.strip().replace("", "미입력")
+        q_summary["난이도"] = q_summary.get("난이도", "").fillna("").astype(str).str.strip().replace("", "미입력")
+        q_summary["배점"] = pd.to_numeric(q_summary.get("배점", 0), errors="coerce").fillna(0.0)
+        q_summary["문항번호"] = pd.to_numeric(q_summary.get("문항번호", 0), errors="coerce").fillna(0).astype(int)
+
+        def join_unique_text(values: pd.Series) -> str:
+            items = []
+            for value in values:
+                text = str(value).strip()
+                if text and text not in items:
+                    items.append(text)
+            return " / ".join(items)
+
+        def difficulty_layout(group: pd.DataFrame) -> str:
+            order = ["어려움", "보통", "쉬움", "미입력"]
+            parts = []
+            for diff in order:
+                sub = group[group["난이도"] == diff]
+                if not sub.empty:
+                    parts.append(f"{diff} {len(sub)}문항/{sub['배점'].sum():.1f}점")
+            return " · ".join(parts)
+
+        def item_layout(group: pd.DataFrame) -> str:
+            rows = []
+            for _, row in group.sort_values("문항번호").iterrows():
+                rows.append(f"{int(row['문항번호'])}번({row['평가영역']} · {row['난이도']} · {row['배점']:.1f}점)")
+            return " / ".join(rows)
+
+        standard_summary_rows = []
+        for standard, group in q_summary.groupby("성취기준", dropna=False, sort=False):
+            standard_summary_rows.append({
+                "성취기준": standard,
+                "성취기준총점": group["배점"].sum(),
+                "문항수": len(group),
+                "평가요소": join_unique_text(group["평가영역"]),
+                "난이도 배치": difficulty_layout(group),
+                "문항별 구성": item_layout(group),
+            })
+        standard_summary_df = pd.DataFrame(standard_summary_rows)
+        st.dataframe(format_output_df(standard_summary_df), use_container_width=True, hide_index=True)
+
+        with st.expander("성취기준-평가요소별 상세 구성", expanded=False):
+            detail_df = q_summary.groupby(["성취기준", "평가영역", "난이도"], dropna=False, sort=False).agg(
+                문항수=("문항번호", "count"),
+                배점합계=("배점", "sum"),
+                문항번호=("문항번호", lambda x: ", ".join(map(str, sorted([int(v) for v in x if pd.notna(v)])))),
+            ).reset_index()
+            st.dataframe(format_output_df(detail_df), use_container_width=True, hide_index=True)
 
     st.subheader("3. 분석 기준")
     c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
