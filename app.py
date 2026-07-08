@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.52
+성취수준별 평가결과 분석 웹앱 v1.53
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -55,6 +55,7 @@
 - v1.50: 수정된 문항정보 요약을 표 대신 성취기준별 카드형 목록으로 재구성
 - v1.51: 성취기준별 카드형 요약에서 불필요한 “성취기준 1/2” 번호 제목을 제거하고 성취기준 내용을 바로 표시
 - v1.52: 문항정보 수정표를 적용 버튼 방식으로 변경하여 평가요소 수정값이 셀 편집 중간에 일부 반영되지 않는 문제를 안정화
+- v1.53: 문항정보 수정 방식을 표형 data_editor에서 문항별 가로 입력칸 방식으로 변경하고 문항 추가/삭제 기능 추가
 - v1.34: AI 분석 결과 다운로드를 TXT에서 Word(.docx) 보고서 형식으로 변경하고, 문서 상단에 평가 정보를 자동 삽입
 
 주요 기능
@@ -87,7 +88,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.52"
+APP_VERSION = "v1.53"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1983,35 +1984,73 @@ def main() -> None:
         st.session_state[editor_state_key] = normalize_question_editor_df(parsed.question_df)
 
     editable_question_df = normalize_question_editor_df(st.session_state[editor_state_key])
+    if "_row_id" not in editable_question_df.columns:
+        editable_question_df["_row_id"] = [f"q_{i}_{int(num)}" for i, num in enumerate(editable_question_df["문항번호"].tolist())]
+        st.session_state[editor_state_key] = editable_question_df.copy()
 
-    st.info("표에서 수정한 평가요소, 성취기준, 난이도, 배점, 정답은 아래 분석과 AI 분석에 반영됩니다. 수정 후에는 반드시 아래의 '문항정보 수정값 적용' 버튼을 눌러 주세요. 파일을 다시 올리거나 정오표 목록을 초기화하기 전까지 적용한 수정값이 유지됩니다.")
+    st.info("가로 입력칸에서 수정한 평가요소, 성취기준, 난이도, 배점, 정답은 아래 분석과 AI 분석에 반영됩니다. 수정 후에는 반드시 아래의 '문항정보 수정값 적용' 버튼을 눌러 주세요. 파일을 다시 올리거나 정오표 목록을 초기화하기 전까지 적용한 수정값이 유지됩니다.")
     st.warning("평가요소는 이후 평가영역별 분석과 AI 분석의 핵심 기준이 되므로, 문항정보표의 내용을 그대로 사용하기보다 반드시 문항의 실제 평가 내용을 반영하도록 수정해 주세요. 특히 평가영역이 단원명이나 큰 주제처럼 넓게 입력되어 있다면, 해당 문항이 실제로 평가하는 개념, 사고 과정, 자료 해석 능력, 적용 상황 등이 드러나도록 구체적으로 보완해야 합니다. 평가요소가 자세할수록 문항별 정답률, 오답 경향, 성취수준별 차이를 더 정확하고 의미 있게 해석할 수 있습니다.")
 
-    with st.form(key=f"question_info_editor_form_{editor_signature[:12]}", clear_on_submit=False):
-        edited_question_df = st.data_editor(
-            editable_question_df,
-            use_container_width=True,
-            height=360,
-            hide_index=True,
-            key=f"question_info_editor_{editor_signature[:12]}",
-            disabled=["문항번호"],
-            column_order=["문항번호", "평가영역", "성취기준", "난이도", "배점", "정답"],
-            column_config={
-                "문항번호": st.column_config.NumberColumn("문항번호", step=1, disabled=True),
-                "평가영역": st.column_config.TextColumn("★ 평가요소", help="분석에 사용할 평가영역/평가요소명을 구체적으로 수정할 수 있습니다."),
-                "성취기준": st.column_config.TextColumn("성취기준", width="large", help="AI 해석과 평가영역별 분석에 반영됩니다."),
-                "난이도": st.column_config.SelectboxColumn("난이도", options=["", "어려움", "보통", "쉬움"]),
-                "배점": st.column_config.NumberColumn("배점", step=0.1, format="%.2f"),
-                "정답": st.column_config.TextColumn("정답"),
-            },
-        )
-        apply_question_edits = st.form_submit_button("문항정보 수정값 적용", type="primary")
+    add_col, guide_col = st.columns([1, 4])
+    with add_col:
+        if st.button("+ 문항 추가", key=f"add_question_row_{editor_signature[:12]}"):
+            current_df = normalize_question_editor_df(st.session_state[editor_state_key])
+            if "_row_id" not in current_df.columns:
+                current_df["_row_id"] = [f"q_{i}_{int(num)}" for i, num in enumerate(current_df["문항번호"].tolist())]
+            max_q = pd.to_numeric(current_df["문항번호"], errors="coerce").fillna(0).max() if not current_df.empty else 0
+            new_id = f"new_{datetime.now().strftime('%H%M%S%f')}"
+            new_row = {"문항번호": int(max_q) + 1, "평가영역": "", "성취기준": "", "난이도": "보통", "배점": 0.0, "정답": "", "_row_id": new_id}
+            st.session_state[editor_state_key] = pd.concat([current_df, pd.DataFrame([new_row])], ignore_index=True)
+            st.rerun()
+    with guide_col:
+        st.caption("문항이 잘못 인식되었거나 누락된 경우 직접 문항을 추가하고, 삭제할 문항은 오른쪽 삭제 체크 후 적용하세요.")
 
-    if apply_question_edits:
+    editable_question_df = normalize_question_editor_df(st.session_state[editor_state_key])
+    if "_row_id" not in editable_question_df.columns:
+        editable_question_df["_row_id"] = [f"q_{i}_{int(num)}" for i, num in enumerate(editable_question_df["문항번호"].tolist())]
+
+    header_cols = st.columns([0.75, 2.4, 2.4, 0.9, 0.8, 0.9, 0.55])
+    headers = ["문항", "★ 평가요소", "성취기준", "난이도", "배점", "정답", "삭제"]
+    for col, label in zip(header_cols, headers):
+        col.markdown(f"**{label}**")
+
+    edited_rows: List[Dict[str, Any]] = []
+    with st.form(key=f"question_info_editor_form_{editor_signature[:12]}", clear_on_submit=False):
+        for idx, row in editable_question_df.reset_index(drop=True).iterrows():
+            row_id = str(row.get("_row_id", f"row_{idx}"))
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([0.75, 2.4, 2.4, 0.9, 0.8, 0.9, 0.55])
+            q_no = c1.number_input("문항번호", min_value=1, step=1, value=int(pd.to_numeric(row.get("문항번호", idx + 1), errors="coerce") or idx + 1), key=f"qno_{editor_signature[:8]}_{row_id}", label_visibility="collapsed")
+            eval_area = c2.text_input("평가요소", value=str(row.get("평가영역", "")), key=f"eval_{editor_signature[:8]}_{row_id}", label_visibility="collapsed", placeholder="문항의 실제 평가 내용을 구체적으로 입력")
+            standard = c3.text_input("성취기준", value=str(row.get("성취기준", "")), key=f"std_{editor_signature[:8]}_{row_id}", label_visibility="collapsed")
+            diff_value = str(row.get("난이도", ""))
+            diff_options = ["", "어려움", "보통", "쉬움"]
+            diff_index = diff_options.index(diff_value) if diff_value in diff_options else 0
+            difficulty = c4.selectbox("난이도", options=diff_options, index=diff_index, key=f"diff_{editor_signature[:8]}_{row_id}", label_visibility="collapsed")
+            score = c5.number_input("배점", min_value=0.0, step=0.1, value=float(pd.to_numeric(row.get("배점", 0), errors="coerce") or 0.0), key=f"score_{editor_signature[:8]}_{row_id}", label_visibility="collapsed", format="%.2f")
+            answer = c6.text_input("정답", value=str(row.get("정답", "")), key=f"ans_{editor_signature[:8]}_{row_id}", label_visibility="collapsed", placeholder="예: 3 또는 2,3")
+            delete_row = c7.checkbox("삭제", value=False, key=f"del_{editor_signature[:8]}_{row_id}", label_visibility="collapsed")
+            edited_rows.append({"문항번호": q_no, "평가영역": eval_area, "성취기준": standard, "난이도": difficulty, "배점": score, "정답": answer, "_row_id": row_id, "삭제": delete_row})
+
+        form_cols = st.columns([1.2, 1.2, 3])
+        apply_question_edits = form_cols[0].form_submit_button("문항정보 수정값 적용", type="primary")
+        delete_question_rows = form_cols[1].form_submit_button("선택 문항 삭제")
+
+    if apply_question_edits or delete_question_rows:
+        edited_question_df = pd.DataFrame(edited_rows)
+        if delete_question_rows:
+            edited_question_df = edited_question_df[~edited_question_df["삭제"]].copy()
+        edited_question_df = edited_question_df.drop(columns=["삭제"], errors="ignore")
         edited_question_df = normalize_question_editor_df(edited_question_df)
+        if "_row_id" not in edited_question_df.columns:
+            edited_question_df["_row_id"] = [f"q_{i}_{int(num)}" for i, num in enumerate(edited_question_df["문항번호"].tolist())]
+        edited_question_df = edited_question_df.sort_values("문항번호").reset_index(drop=True)
         st.session_state[editor_state_key] = edited_question_df.copy()
         st.session_state["question_info_editor_applied_at"] = datetime.now().strftime("%H:%M:%S")
-        st.success("문항정보 수정값을 적용했습니다. 아래 요약과 분석 결과에 적용된 값이 반영됩니다.")
+        if delete_question_rows:
+            st.success("선택한 문항을 삭제하고 문항정보 수정값을 적용했습니다.")
+        else:
+            st.success("문항정보 수정값을 적용했습니다. 아래 요약과 분석 결과에 적용된 값이 반영됩니다.")
+        st.rerun()
     else:
         edited_question_df = normalize_question_editor_df(st.session_state[editor_state_key])
 
@@ -2020,7 +2059,7 @@ def main() -> None:
         st.caption(f"마지막 적용 시각: {applied_at}")
 
     # 편집값 정규화 후 전체 분석 데이터에 재반영
-    parsed.question_df = edited_question_df.copy()
+    parsed.question_df = edited_question_df.drop(columns=["_row_id"], errors="ignore").copy()
     parsed.question_df["문항번호"] = pd.to_numeric(parsed.question_df["문항번호"], errors="coerce").fillna(0).astype(int)
     parsed.question_df["배점"] = pd.to_numeric(parsed.question_df["배점"], errors="coerce").fillna(0.0)
     parsed.question_df["정답"] = parsed.question_df["정답"].apply(normalize_choice_answer_value)
