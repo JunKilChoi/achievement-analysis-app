@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.94
+성취수준별 평가결과 분석 웹앱 v1.95
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -89,6 +89,7 @@
 - v1.88: 고급 분석에서 별도의 분석 범위 선택을 제거하고, 원안지 기반 고급 분석 프리셋 중심으로 실행되도록 단순화
 - v1.89: Word AI 분석 보고서의 평가 정보 영역을 공문서형 요약 표와 강조 박스 중심 양식으로 개선
 - v1.90: 나이스 문항정보표가 없는 학교를 위해 앱 전용 문항정보표 양식 다운로드와 업로드 인식 기능 추가
+- v1.95: 파일 업로드 전 나이스 XLS data 다운로드 경로와 강의실별 정오표 저장 안내 문구 추가
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -125,7 +126,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.94"
+APP_VERSION = "v1.95"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2592,6 +2593,30 @@ def main() -> None:
             "auto_recognition_editor_values",
         ]:
             st.session_state.pop(key, None)
+
+    if not question_file and not answer_files:
+        st.markdown("""
+        <div style="border:1px solid #e5e7eb; border-radius:14px; padding:18px 20px; background:#f8fafc; margin:16px 0 18px 0;">
+            <div style="font-size:1.08rem; font-weight:800; color:#111827; margin-bottom:10px;">파일 업로드 안내</div>
+            <div style="color:#374151; line-height:1.65; font-size:0.95rem;">
+                문항정보표와 교과목별학생정오표는 반드시 나이스에서 <b>XLS data</b> 형식으로 다운로드한 파일을 업로드해 주세요.
+            </div>
+            <div style="margin-top:14px; color:#111827; font-weight:700;">문항정보표</div>
+            <div style="color:#374151; line-height:1.65; font-size:0.94rem;">
+                나이스 → [교과담임] → [정기시험] → [문항정보표관리] → 학년·과목 선택 → [조회] → [출력] → [XLS data]
+            </div>
+            <div style="margin-top:14px; color:#111827; font-weight:700;">교과목별학생정오표</div>
+            <div style="color:#374151; line-height:1.65; font-size:0.94rem;">
+                나이스 → [교과담임] → [정기시험조회/통계] → [교과목별학생정오표] → 강의실별 [조회] → [XLS data]
+            </div>
+            <div style="margin-top:8px; color:#475569; line-height:1.65; font-size:0.93rem;">
+                여러 강의실을 담당하는 경우, 각 강의실을 선택하여 조회한 뒤 강의실별 정오표 파일을 각각 저장해 주세요. 저장한 파일들은 이 앱에 한꺼번에 업로드할 수 있습니다.
+            </div>
+            <div style="margin-top:14px; padding:10px 12px; border-radius:10px; background:#fff7ed; border:1px solid #fed7aa; color:#7c2d12; line-height:1.55; font-size:0.93rem;">
+                <b>주의</b> · 두 파일 모두 XLS data 버전이어야 합니다. PDF, 화면 출력용 파일, 임의로 편집한 엑셀 파일은 정상 인식되지 않을 수 있습니다.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     if not question_file or not answer_files:
         st.info("문항정보표와 학생답 정오표를 모두 업로드하면 자동 분석을 시작합니다. 정오표는 여러 개 업로드할 수 있습니다.")
