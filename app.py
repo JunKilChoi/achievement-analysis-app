@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.101
+성취수준별 평가결과 분석 웹앱 v1.102
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -96,6 +96,7 @@
 - v1.99: 직접 작성 프롬프트 모드에도 분석 요청 프리셋을 추가하고 프롬프트 사용 방식 도움말을 보강
 - v1.100: 직접 작성 프롬프트 모드의 빈 입력 안내 박스 제거
 - v1.101: 데이터 확인 항목 도움말을 추가하고 문항정보 수정 안내 문구 보강
+- v1.102: 데이터 확인 항목 도움말을 Streamlit 기본 도움말 방식으로 수정
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -132,7 +133,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.101"
+APP_VERSION = "v1.102"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -3126,15 +3127,7 @@ def main() -> None:
 
     if selected_analysis_tab == "데이터 확인":
         def render_data_check_help_heading(title: str, help_text: str) -> None:
-            st.markdown(
-                f"""
-                <div style="display:flex; align-items:center; gap:7px; margin:0 0 0.45rem 0;">
-                    <div style="font-size:1.18rem; font-weight:700; color:#111827; line-height:1.35;">{html.escape(title)}</div>
-                    <span title="{html.escape(help_text, quote=True)}" style="display:inline-flex; align-items:center; justify-content:center; width:19px; height:19px; border-radius:999px; border:1px solid #cbd5e1; color:#475569; font-size:0.78rem; font-weight:700; cursor:help; background:#f8fafc;">?</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            st.subheader(title, help=help_text)
 
         with st.container(border=True):
             render_data_check_help_heading(
