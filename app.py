@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.104
+성취수준별 평가결과 분석 웹앱 v1.105
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -98,6 +98,7 @@
 - v1.101: 데이터 확인 항목 도움말을 추가하고 문항정보 수정 안내 문구 보강
 - v1.102: 데이터 확인 항목 도움말을 Streamlit 기본 도움말 방식으로 수정
 - v1.104: 전체 분석 그래프 도움말 문구를 조정하고 최고·최저 표시가 y축 점수값에서 벗어나지 않도록 보정
+- v1.105: 전체 분석 그래프의 점수 분포 그래프 하단이 실제 최저점보다 아래로 표시되지 않도록 보정
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -134,7 +135,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.104"
+APP_VERSION = "v1.105"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -822,15 +823,21 @@ def make_class_score_distribution_chart_data(individual_df: pd.DataFrame, class_
         max_count = max(int(counts.max()), 1)
         pos = class_pos_map[str(c)]
         label = class_label_map[pos]
-        for count, low, high in zip(counts, edges[:-1], edges[1:]):
+        positive_idx = [i for i, count in enumerate(counts) if count > 0]
+        actual_min = float(scores.min())
+        actual_max = float(scores.max())
+        for i, (count, low, high) in enumerate(zip(counts, edges[:-1], edges[1:])):
             if count <= 0:
                 continue
+            # 점수 분포 그래프의 첫/마지막 표시 경계가 실제 최저점·최고점 밖으로 나가지 않도록 보정한다.
+            display_low = max(float(low), actual_min) if i == positive_idx[0] else float(low)
+            display_high = min(float(high), actual_max) if i == positive_idx[-1] else float(high)
             half_width = 0.06 + (float(count) / max_count) * 0.34
             dist_rows.append({
                 "학급위치": pos,
                 "학급": label,
-                "점수구간하한": float(low),
-                "점수구간상한": float(high),
+                "점수구간하한": display_low,
+                "점수구간상한": display_high,
                 "도수(명)": int(count),
                 "점수구간": f"{low:.0f}점-{high:.0f}점",
                 "왼쪽폭": pos - half_width,
