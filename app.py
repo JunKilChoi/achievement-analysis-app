@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.96
+성취수준별 평가결과 분석 웹앱 v1.97
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -91,6 +91,7 @@
 - v1.90: 나이스 문항정보표가 없는 학교를 위해 앱 전용 문항정보표 양식 다운로드와 업로드 인식 기능 추가
 - v1.95: 파일 업로드 전 나이스 XLS data 다운로드 경로와 강의실별 정오표 저장 안내 문구 추가
 - v1.96: 파일 업로드 안내에 나이스 문항정보표가 없는 경우 앱 전용 양식 작성 후 업로드 가능 안내 문구 추가
+- v1.97: AI 분석 3종에 기본 프롬프트 보기와 기본 프롬프트 사용 방식 선택 기능 추가
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -127,7 +128,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.96"
+APP_VERSION = "v1.97"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1334,6 +1335,72 @@ def append_focus_request_to_prompt(prompt: str, focus_request: str) -> str:
 {focus_request}
 """.rstrip()
     return f"{prompt.rstrip()}\n{focus_block}"
+
+
+PROMPT_MODE_DEFAULT = "기본 프롬프트 그대로 사용"
+PROMPT_MODE_WITH_FOCUS = "기본 프롬프트 + 추가 의뢰 사용"
+PROMPT_MODE_DIRECT = "직접 작성한 프롬프트만 사용"
+PROMPT_MODE_OPTIONS = [PROMPT_MODE_DEFAULT, PROMPT_MODE_WITH_FOCUS, PROMPT_MODE_DIRECT]
+
+
+def extract_prompt_data_context(base_prompt: str) -> str:
+    """직접 작성 프롬프트 모드에서도 앱 분석 데이터는 함께 전달하기 위해 기본 프롬프트의 데이터 블록만 추출한다."""
+    prompt_text = str(base_prompt or "")
+    start_candidates = [
+        prompt_text.find("[고급 분석 범위]"),
+        prompt_text.find("[학생]"),
+        prompt_text.find("[평가 정보]"),
+    ]
+    start_candidates = [idx for idx in start_candidates if idx >= 0]
+    start_idx = min(start_candidates) if start_candidates else 0
+
+    end_candidates = []
+    for marker in ["\n\n다음 구조", "\n\n다음 형식", "\n\n작성 원칙:"]:
+        idx = prompt_text.find(marker, start_idx)
+        if idx >= 0:
+            end_candidates.append(idx)
+    end_idx = min(end_candidates) if end_candidates else len(prompt_text)
+    return prompt_text[start_idx:end_idx].strip()
+
+
+def build_direct_custom_ai_prompt(base_prompt: str, custom_prompt: str, analysis_label: str) -> str:
+    """기본 분석 목차는 빼고 사용자가 직접 작성한 지시문과 앱 데이터만 결합한다."""
+    data_context = extract_prompt_data_context(base_prompt)
+    custom_prompt = str(custom_prompt or "").strip()
+    return f"""
+너는 중학교 과학 평가 결과를 해석하는 교육평가 전문가이다.
+
+[분석 유형]
+{analysis_label}
+
+[사용자 직접 작성 프롬프트]
+{custom_prompt}
+
+[분석에 사용할 앱 데이터]
+{data_context}
+
+작성 원칙:
+- 위의 사용자 직접 작성 프롬프트를 최우선으로 따르라.
+- 웹앱의 기본 분석 목차나 기본 분석 요구사항을 따르지 말고, 사용자가 요청한 범위와 형식에 맞춰 작성하라.
+- 단, 분석 근거는 위에 제공된 앱 데이터와 원안지 PDF가 있는 경우 해당 PDF에 한정하라.
+- 문항번호, 정답률, 변별도, 평가영역, 성취기준 등 제공된 수치를 근거로 활용하라.
+- 학생 이름은 직접 쓰지 말고 필요한 경우 '해당 학생' 또는 '학생'으로 표현하라.
+""".strip()
+
+
+def compose_ai_prompt_by_mode(
+    base_prompt: str,
+    prompt_mode: str,
+    focus_request: str = "",
+    custom_prompt: str = "",
+    analysis_label: str = "AI 분석",
+) -> str:
+    """선택한 프롬프트 사용 방식에 따라 실제 AI 전달 프롬프트를 구성한다."""
+    if prompt_mode == PROMPT_MODE_WITH_FOCUS:
+        return append_focus_request_to_prompt(base_prompt, focus_request)
+    if prompt_mode == PROMPT_MODE_DIRECT:
+        return build_direct_custom_ai_prompt(base_prompt, custom_prompt, analysis_label)
+    return base_prompt
 
 
 BASIC_OVERALL_FOCUS_PRESETS: Dict[str, str] = {
@@ -3653,35 +3720,76 @@ def main() -> None:
                 if basic_mode == "학생 개별 분석":
                     student_options = analysis["individual"].sort_values(["반", "번호"])["반/번호"].tolist()
                     ai_student = st.selectbox("AI 분석 대상 학생", student_options, key="basic_ai_student")
-                    basic_prompt = build_individual_ai_prompt(parsed, analysis, ai_student, anonymize=anonymize)
+                    base_basic_prompt = build_individual_ai_prompt(parsed, analysis, ai_student, anonymize=anonymize)
                     basic_download_name = "AI_기본분석_학생개별.docx"
+                    basic_prompt_mode_key = "basic_individual_prompt_mode"
+                    basic_base_preview_key = "basic_individual_base_prompt_preview"
+                    basic_custom_key = "basic_individual_direct_prompt"
+                    basic_analysis_label = "기본 분석: 학생 개별 분석"
                 else:
-                    basic_prompt = build_basic_statistics_ai_prompt(parsed, analysis)
+                    base_basic_prompt = build_basic_statistics_ai_prompt(parsed, analysis)
                     basic_download_name = "AI_기본분석_통계기반해석.docx"
+                    basic_prompt_mode_key = "basic_overall_prompt_mode"
+                    basic_base_preview_key = "basic_overall_base_prompt_preview"
+                    basic_custom_key = "basic_overall_direct_prompt"
+                    basic_analysis_label = "기본 분석: 전체 통계 분석"
 
-                if basic_mode == "학생 개별 분석":
-                    basic_focus_request = render_focus_request_with_preset(
-                        "중점 분석 요청 프리셋",
-                        BASIC_INDIVIDUAL_FOCUS_PRESETS,
-                        "basic_individual_focus_preset",
-                        "basic_individual_focus_request",
-                        "예: 학생 맞춤형 피드백, 다음 시험 준비 전략, 보충 학습이 필요한 개념 등을 중점적으로 분석해줘.",
-                        "프리셋을 고르면 아래 요청 문구가 자동 입력됩니다. 필요하면 직접 수정할 수 있습니다. 비워두면 기존 프롬프트 그대로 작동합니다.",
+                basic_prompt_mode = st.radio(
+                    "프롬프트 사용 방식",
+                    PROMPT_MODE_OPTIONS,
+                    horizontal=True,
+                    key=basic_prompt_mode_key,
+                    help="웹앱 기본 프롬프트를 그대로 쓸지, 기본 프롬프트에 추가 의뢰를 붙일지, 직접 작성한 프롬프트만 쓸지 선택합니다.",
+                )
+                with st.expander("웹앱 기본 프롬프트 보기", expanded=False):
+                    st.text_area("웹앱 기본 프롬프트", base_basic_prompt, height=420)
+
+                basic_focus_request = ""
+                basic_custom_prompt = ""
+                if basic_prompt_mode == PROMPT_MODE_WITH_FOCUS:
+                    if basic_mode == "학생 개별 분석":
+                        basic_focus_request = render_focus_request_with_preset(
+                            "중점 분석 요청 프리셋",
+                            BASIC_INDIVIDUAL_FOCUS_PRESETS,
+                            "basic_individual_focus_preset",
+                            "basic_individual_focus_request",
+                            "예: 학생 맞춤형 피드백, 다음 시험 준비 전략, 보충 학습이 필요한 개념 등을 중점적으로 분석해줘.",
+                            "프리셋을 고르면 아래 요청 문구가 자동 입력됩니다. 필요하면 직접 수정할 수 있습니다. 비워두면 기본 프롬프트만 사용합니다.",
+                        )
+                    else:
+                        basic_focus_request = render_focus_request_with_preset(
+                            "중점 분석 요청 프리셋",
+                            BASIC_OVERALL_FOCUS_PRESETS,
+                            "basic_overall_focus_preset",
+                            "basic_overall_focus_request",
+                            "예: 정답률이 낮은 문항, 오답 선택지 반응, 학급 간 차이, 평가 타당도 관점 등을 중점적으로 분석해줘.",
+                            "프리셋을 고르면 아래 요청 문구가 자동 입력됩니다. 필요하면 직접 수정할 수 있습니다. 비워두면 기본 프롬프트만 사용합니다.",
+                        )
+                elif basic_prompt_mode == PROMPT_MODE_DIRECT:
+                    basic_custom_prompt = st.text_area(
+                        "AI에게 직접 전달할 분석 지시문",
+                        placeholder="예: 전체 분석은 하지 말고, 정답률이 50% 미만인 문항만 표로 정리하고 학생들이 어려워했을 가능성을 간단히 분석해줘.",
+                        height=170,
+                        key=basic_custom_key,
+                        help="이 모드에서는 웹앱의 기본 분석 목차를 사용하지 않고, 여기에 작성한 지시문과 앱 분석 데이터만 AI에 전달합니다.",
                     )
+                    if not basic_custom_prompt.strip():
+                        st.warning("직접 작성한 프롬프트만 사용하려면 분석 지시문을 입력해 주세요.")
                 else:
-                    basic_focus_request = render_focus_request_with_preset(
-                        "중점 분석 요청 프리셋",
-                        BASIC_OVERALL_FOCUS_PRESETS,
-                        "basic_overall_focus_preset",
-                        "basic_overall_focus_request",
-                        "예: 정답률이 낮은 문항, 오답 선택지 반응, 학급 간 차이, 평가 타당도 관점 등을 중점적으로 분석해줘.",
-                        "프리셋을 고르면 아래 요청 문구가 자동 입력됩니다. 필요하면 직접 수정할 수 있습니다. 비워두면 기존 프롬프트 그대로 작동합니다.",
-                    )
-                basic_prompt = append_focus_request_to_prompt(basic_prompt, basic_focus_request)
+                    st.caption("웹앱 기본 프롬프트만 사용합니다. 추가 의뢰나 직접 작성 프롬프트는 붙지 않습니다.")
+
+                basic_prompt = compose_ai_prompt_by_mode(
+                    base_basic_prompt,
+                    basic_prompt_mode,
+                    focus_request=basic_focus_request,
+                    custom_prompt=basic_custom_prompt,
+                    analysis_label=basic_analysis_label,
+                )
+                basic_report_focus_request = basic_focus_request if basic_prompt_mode == PROMPT_MODE_WITH_FOCUS else (basic_custom_prompt if basic_prompt_mode == PROMPT_MODE_DIRECT else "")
 
             with st.container(border=True):
-                with st.expander("AI에 전달될 기본 분석 프롬프트 확인", expanded=False):
-                    st.text_area("기본 분석 프롬프트", basic_prompt, height=420)
+                with st.expander("최종 AI 전달 프롬프트 확인", expanded=False):
+                    st.text_area("최종 AI 전달 프롬프트", basic_prompt, height=420)
                 result_state_key = "basic_ai_result_text"
                 docx_state_key = "basic_ai_docx_bytes"
                 filename_state_key = "basic_ai_docx_filename"
@@ -3699,6 +3807,8 @@ def main() -> None:
                 if st.button("기본 분석 실행", type="primary", key="run_basic_ai"):
                     if not api_key:
                         st.error("OpenAI API Key를 입력하세요.")
+                    elif basic_prompt_mode == PROMPT_MODE_DIRECT and not basic_custom_prompt.strip():
+                        st.error("직접 작성한 프롬프트만 사용하려면 분석 지시문을 입력하세요.")
                     else:
                         try:
                             # 새 분석을 시작할 때만 기존 결과를 지우고, 다운로드 버튼 클릭으로 인한 rerun에서는 유지한다.
@@ -3719,7 +3829,7 @@ def main() -> None:
 
                             report_title = "성취수준별 평가결과 AI 분석 보고서"
                             report_type = f"기본 분석: {basic_mode}"
-                            docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type, focus_request=basic_focus_request)
+                            docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type, focus_request=basic_report_focus_request)
 
                             st.session_state[result_state_key] = result
                             st.session_state[docx_state_key] = docx_bytes
@@ -3752,21 +3862,35 @@ def main() -> None:
         elif ai_section_mode == "고급 분석: 원안지 기반 심층 해석":
             with st.container(border=True):
                 st.markdown("#### 고급 분석: 원안지 기반 심층 해석")
-                st.markdown("원안지 PDF를 업로드한 뒤, 중점 분석 요청 프리셋을 고르고 문항 내용 기반 심층 분석을 생성합니다.")
+                st.markdown("원안지 PDF를 업로드한 뒤, 프롬프트 사용 방식과 필요 시 중점 분석 요청 프리셋을 고르고 문항 내용 기반 심층 분석을 생성합니다.")
                 source_pdf = st.file_uploader("원안지 PDF 업로드", type=["pdf"], key="source_exam_pdf")
 
-                advanced_focus_request = render_focus_request_with_preset(
-                    "중점 분석 요청 프리셋",
-                    ADVANCED_FOCUS_PRESETS,
-                    "advanced_focus_preset_v188",
-                    "advanced_focus_request_v188",
-                    "예: 문항 완성도·엄밀성, 오답 선택지 매력도, 발문 명확성, 성취기준 적합성 등을 중점적으로 분석해줘.",
-                    "원안지 기반 고급 분석 전용 프리셋입니다. 문항 설계, 발문, 선택지, 정답 근거, 문항 완성도·엄밀성 등 원안지 PDF를 함께 보며 분석할 관점을 고를 수 있습니다. 프리셋을 고르면 아래 요청 문구가 자동 입력되고, 필요하면 직접 수정할 수 있습니다.",
+                advanced_prompt_mode = st.radio(
+                    "프롬프트 사용 방식",
+                    PROMPT_MODE_OPTIONS,
+                    horizontal=True,
+                    key="advanced_prompt_mode_v197",
+                    help="웹앱 기본 프롬프트를 그대로 쓸지, 기본 프롬프트에 추가 의뢰를 붙일지, 직접 작성한 프롬프트만 쓸지 선택합니다.",
                 )
-                selected_advanced_preset = st.session_state.get("advanced_focus_preset_v188", "직접 입력")
+
+                advanced_focus_request = ""
+                selected_advanced_preset = "직접 입력"
+                if advanced_prompt_mode == PROMPT_MODE_WITH_FOCUS:
+                    advanced_focus_request = render_focus_request_with_preset(
+                        "중점 분석 요청 프리셋",
+                        ADVANCED_FOCUS_PRESETS,
+                        "advanced_focus_preset_v188",
+                        "advanced_focus_request_v188",
+                        "예: 문항 완성도·엄밀성, 오답 선택지 매력도, 발문 명확성, 성취기준 적합성 등을 중점적으로 분석해줘.",
+                        "원안지 기반 고급 분석 전용 프리셋입니다. 문항 설계, 발문, 선택지, 정답 근거, 문항 완성도·엄밀성 등 원안지 PDF를 함께 보며 분석할 관점을 고를 수 있습니다. 프리셋을 고르면 아래 요청 문구가 자동 입력되고, 필요하면 직접 수정할 수 있습니다.",
+                    )
+                    selected_advanced_preset = st.session_state.get("advanced_focus_preset_v188", "직접 입력")
+                    if selected_advanced_preset != "직접 입력":
+                        st.caption(f"선택한 분석 관점: {selected_advanced_preset}")
+                elif advanced_prompt_mode == PROMPT_MODE_DEFAULT:
+                    st.caption("웹앱 기본 프롬프트만 사용합니다. 추가 의뢰나 직접 작성 프롬프트는 붙지 않습니다.")
+
                 advanced_scope = infer_advanced_scope_from_preset(selected_advanced_preset)
-                if selected_advanced_preset != "직접 입력":
-                    st.caption(f"선택한 분석 관점: {selected_advanced_preset}")
 
                 max_q = int(pd.to_numeric(parsed.question_df["문항번호"], errors="coerce").max()) if not parsed.question_df.empty else None
                 need_item_input = advanced_scope in ["주요 문항 집중 분석", "오답 선택지 분석"]
@@ -3788,7 +3912,7 @@ def main() -> None:
                 advanced_student_key = None
 
                 pdf_name = source_pdf.name if source_pdf is not None else "원안지 PDF 미업로드"
-                advanced_prompt = build_advanced_exam_ai_prompt(
+                base_advanced_prompt = build_advanced_exam_ai_prompt(
                     parsed,
                     analysis,
                     pdf_name=pdf_name,
@@ -3797,11 +3921,33 @@ def main() -> None:
                     student_key=advanced_student_key,
                     anonymize_student=True,
                 )
-                advanced_prompt = append_focus_request_to_prompt(advanced_prompt, advanced_focus_request)
+                with st.expander("웹앱 기본 프롬프트 보기", expanded=False):
+                    st.text_area("웹앱 기본 프롬프트", base_advanced_prompt, height=460)
+
+                advanced_custom_prompt = ""
+                if advanced_prompt_mode == PROMPT_MODE_DIRECT:
+                    advanced_custom_prompt = st.text_area(
+                        "AI에게 직접 전달할 분석 지시문",
+                        placeholder="예: 전체 문항 설계 분석은 생략하고, 원안지에서 정답률이 낮은 문항의 발문과 선택지만 간단히 검토해줘.",
+                        height=170,
+                        key="advanced_direct_prompt_v197",
+                        help="이 모드에서는 웹앱의 기본 분석 목차를 사용하지 않고, 여기에 작성한 지시문과 앱 분석 데이터, 원안지 PDF만 AI에 전달합니다.",
+                    )
+                    if not advanced_custom_prompt.strip():
+                        st.warning("직접 작성한 프롬프트만 사용하려면 분석 지시문을 입력해 주세요.")
+
+                advanced_prompt = compose_ai_prompt_by_mode(
+                    base_advanced_prompt,
+                    advanced_prompt_mode,
+                    focus_request=advanced_focus_request,
+                    custom_prompt=advanced_custom_prompt,
+                    analysis_label=f"고급 분석: {advanced_scope}",
+                )
+                advanced_report_focus_request = advanced_focus_request if advanced_prompt_mode == PROMPT_MODE_WITH_FOCUS else (advanced_custom_prompt if advanced_prompt_mode == PROMPT_MODE_DIRECT else "")
 
             with st.container(border=True):
-                with st.expander("AI에 전달될 고급 분석 프롬프트 확인", expanded=False):
-                    st.text_area("고급 분석 프롬프트", advanced_prompt, height=460)
+                with st.expander("최종 AI 전달 프롬프트 확인", expanded=False):
+                    st.text_area("최종 AI 전달 프롬프트", advanced_prompt, height=460)
 
                 adv_result_state_key = "advanced_ai_result_text"
                 adv_docx_state_key = "advanced_ai_docx_bytes"
@@ -3823,6 +3969,8 @@ def main() -> None:
                 if st.button("고급 분석 실행", type="primary", key="run_advanced_ai", disabled=(source_pdf is None)):
                     if not api_key:
                         st.error("OpenAI API Key를 입력하세요.")
+                    elif advanced_prompt_mode == PROMPT_MODE_DIRECT and not advanced_custom_prompt.strip():
+                        st.error("직접 작성한 프롬프트만 사용하려면 분석 지시문을 입력하세요.")
                     else:
                         try:
                             st.session_state.pop(adv_result_state_key, None)
@@ -3843,7 +3991,7 @@ def main() -> None:
 
                             report_title = "성취수준별 평가결과 원안지 기반 고급 분석 보고서"
                             report_type = f"고급 분석: {advanced_scope}"
-                            docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type, focus_request=advanced_focus_request)
+                            docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type, focus_request=advanced_report_focus_request)
 
                             st.session_state[adv_result_state_key] = result
                             st.session_state[adv_docx_state_key] = docx_bytes
