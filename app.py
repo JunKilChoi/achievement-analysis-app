@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.105
+성취수준별 평가결과 분석 웹앱 v1.106
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -99,6 +99,7 @@
 - v1.102: 데이터 확인 항목 도움말을 Streamlit 기본 도움말 방식으로 수정
 - v1.104: 전체 분석 그래프 도움말 문구를 조정하고 최고·최저 표시가 y축 점수값에서 벗어나지 않도록 보정
 - v1.105: 전체 분석 그래프의 점수 분포 그래프 하단이 실제 최저점보다 아래로 표시되지 않도록 보정
+- v1.106: 전체 분석 그래프의 최고점·최저점 범위선을 선이 아닌 직사각형 표시로 바꾸어 최저점 위치가 실제 점수값에 맞도록 보정
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -135,7 +136,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.105"
+APP_VERSION = "v1.106"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -854,7 +855,11 @@ def make_class_score_distribution_chart_data(individual_df: pd.DataFrame, class_
     summary["최고라벨"] = summary["최고점"].apply(lambda x: f"최고 {x:.1f}" if pd.notna(x) else "최고")
     summary["최저라벨"] = summary["최저점"].apply(lambda x: f"최저 {x:.1f}" if pd.notna(x) else "최저")
     summary["평균라벨"] = summary["평균"].apply(lambda x: f"평균 {x:.1f}" if pd.notna(x) else "평균")
-    summary = summary[["학급위치", "학급", "최고점", "평균", "최저점", "최고라벨", "최저라벨", "평균라벨"]]
+    # Vega-Lite rule mark는 선 두께와 렌더링 방식 때문에 끝점이 실제 점수보다 살짝 길어 보일 수 있다.
+    # 최고점~최저점 범위는 얇은 직사각형으로 그려 실제 y축 값에서 정확히 멈추도록 한다.
+    summary["범위왼쪽"] = summary["학급위치"] - 0.018
+    summary["범위오른쪽"] = summary["학급위치"] + 0.018
+    summary = summary[["학급위치", "학급", "최고점", "평균", "최저점", "최고라벨", "최저라벨", "평균라벨", "범위왼쪽", "범위오른쪽"]]
 
     label_array = "[" + ",".join([repr(class_label_map[i]) for i in sorted(class_label_map)]) + "]"
     label_expr = f"{label_array}[datum.value-1]"
@@ -3252,15 +3257,14 @@ def main() -> None:
                                 {
                                     "transform": [{"filter": "datum.그래프요소 == '요약'"}],
                                     "mark": {
-                                        "type": "rule",
-                                        "strokeWidth": 5,
+                                        "type": "rect",
                                         "color": "#111827",
                                         "opacity": 0.95,
-                                        "strokeCap": "butt",
                                         "clip": True,
                                     },
                                     "encoding": {
-                                        "x": {"field": "학급위치", "type": "quantitative"},
+                                        "x": {"field": "범위왼쪽", "type": "quantitative"},
+                                        "x2": {"field": "범위오른쪽"},
                                         "y": {"field": "최저점", "type": "quantitative", "scale": {"domain": [0, chart_y_max], "nice": False, "zero": True}},
                                         "y2": {"field": "최고점"},
                                         "tooltip": [
