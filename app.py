@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.100
+성취수준별 평가결과 분석 웹앱 v1.101
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -95,6 +95,7 @@
 - v1.98: 기본 프롬프트 보기에서 실제 통계 데이터 블록을 제외하고 분석 지시 구조만 표시
 - v1.99: 직접 작성 프롬프트 모드에도 분석 요청 프리셋을 추가하고 프롬프트 사용 방식 도움말을 보강
 - v1.100: 직접 작성 프롬프트 모드의 빈 입력 안내 박스 제거
+- v1.101: 데이터 확인 항목 도움말을 추가하고 문항정보 수정 안내 문구 보강
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -131,7 +132,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.100"
+APP_VERSION = "v1.101"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2858,7 +2859,7 @@ def main() -> None:
         editable_question_df["_row_id"] = [f"q_{i}_{int(num)}" for i, num in enumerate(editable_question_df["문항번호"].tolist())]
         st.session_state[editor_state_key] = editable_question_df.copy()
 
-    st.info("가로 입력칸에서 수정한 평가요소, 성취기준, 난이도, 배점, 정답은 아래 분석과 AI 분석에 반영됩니다. 수정 후에는 반드시 아래의 '문항정보 수정값 적용' 버튼을 눌러 주세요. 파일을 다시 올리거나 정오표 목록을 초기화하기 전까지 적용한 수정값이 유지됩니다.")
+    st.info("가로 입력칸에서 수정한 평가요소, 성취기준, 난이도, 배점, 정답은 아래 분석과 AI 분석에 반영됩니다. 수정 후에는 반드시 아래의 '문항정보 수정값 적용' 버튼을 눌러 주세요. 파일을 다시 올리거나 정오표 목록을 초기화하기 전까지 적용한 수정값이 유지됩니다. 문항정보표 형식에 따라 평가요소나 성취기준이 엑셀에서 다음 페이지로 넘어가며 일부만 인식될 수 있으므로, 평가요소와 성취기준이 빠지거나 잘리지 않았는지 꼼꼼히 확인해 주세요.")
     st.warning("평가요소는 이후 평가영역별 분석과 AI 분석의 핵심 기준이 되므로, 문항정보표의 내용을 그대로 사용하기보다 반드시 문항의 실제 평가 내용을 반영하도록 수정해 주세요. 특히 평가영역이 단원명이나 큰 주제처럼 넓게 입력되어 있다면, 해당 문항이 실제로 평가하는 개념, 사고 과정, 자료 해석 능력, 적용 상황 등이 드러나도록 구체적으로 보완해야 합니다. 평가요소가 자세할수록 문항별 정답률, 오답 경향, 성취수준별 차이를 더 정확하고 의미 있게 해석할 수 있습니다.")
     st.caption("문항이 잘못 인식되었거나 누락된 경우 아래의 '+ 문항 추가'를 사용하고, 삭제할 문항은 오른쪽 삭제 칸을 체크한 뒤 하단의 '선택 문항 삭제'를 누르세요.")
 
@@ -3124,14 +3125,34 @@ def main() -> None:
     )
 
     if selected_analysis_tab == "데이터 확인":
+        def render_data_check_help_heading(title: str, help_text: str) -> None:
+            st.markdown(
+                f"""
+                <div style="display:flex; align-items:center; gap:7px; margin:0 0 0.45rem 0;">
+                    <div style="font-size:1.18rem; font-weight:700; color:#111827; line-height:1.35;">{html.escape(title)}</div>
+                    <span title="{html.escape(help_text, quote=True)}" style="display:inline-flex; align-items:center; justify-content:center; width:19px; height:19px; border-radius:999px; border:1px solid #cbd5e1; color:#475569; font-size:0.78rem; font-weight:700; cursor:help; background:#f8fafc;">?</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
         with st.container(border=True):
-            st.markdown("#### 문항정보")
+            render_data_check_help_heading(
+                "문항정보",
+                "문항번호, 평가요소, 성취기준, 배점, 정답이 제대로 인식되었는지 확인하는 영역입니다. 이전 단계에서 수정한 문항정보와 복수정답 표기가 잘 반영되었는지 확인하세요.",
+            )
             st.dataframe(parsed.question_df, use_container_width=True, height=260)
         with st.container(border=True):
-            st.markdown("#### 학생 정오표")
+            render_data_check_help_heading(
+                "학생 정오표",
+                "업로드한 정오표를 기준으로 학생별 답안이 인식된 표입니다. 정오표 종류에 따라 정답이 . 또는 정답 번호로 표시될 수 있으나, 둘 다 정상적으로 처리됩니다. 담당 반 전체가 업로드되었는지, 학생 수와 반·번호·이름이 정상적으로 보이는지 확인하세요.",
+            )
             st.dataframe(parsed.students_df, use_container_width=True, height=260)
         with st.container(border=True):
-            st.markdown("#### 검증결과")
+            render_data_check_help_heading(
+                "검증결과",
+                "문항정보표의 정답·배점과 정오표의 정답·배점이 일치하는지 확인하는 영역입니다. 모두 정상으로 표시되면 다음 단계로 넘어가면 됩니다.",
+            )
             st.dataframe(parsed.validation_df, use_container_width=True, height=220)
 
     elif selected_analysis_tab == "성취도 분석":
