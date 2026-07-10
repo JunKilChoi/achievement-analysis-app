@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.106
+성취수준별 평가결과 분석 웹앱 v1.107
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -100,6 +100,7 @@
 - v1.104: 전체 분석 그래프 도움말 문구를 조정하고 최고·최저 표시가 y축 점수값에서 벗어나지 않도록 보정
 - v1.105: 전체 분석 그래프의 점수 분포 그래프 하단이 실제 최저점보다 아래로 표시되지 않도록 보정
 - v1.106: 전체 분석 그래프의 최고점·최저점 범위선을 선이 아닌 직사각형 표시로 바꾸어 최저점 위치가 실제 점수값에 맞도록 보정
+- v1.107: 전체 분석 그래프에서 최고점·최저점 세로 범위선을 제거하고 최고점·최저점 라벨과 평균점 중심으로 표시
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -136,7 +137,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.106"
+APP_VERSION = "v1.107"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -3196,7 +3197,7 @@ def main() -> None:
             with st.container(border=True):
                 st.subheader(
                     "전체 분석 그래프",
-                    help="전체 학급의 점수 분포, 최고점, 최저점, 평균을 함께 보여주는 그래프입니다. 회색 점수 분포 그래프는 학생 점수를 5점 단위로 나누어 각 구간의 학생 수를 폭으로 나타낸 것입니다. 폭이 넓을수록 그 점수 구간에 학생이 많다는 뜻입니다. 검은 세로선은 최저점~최고점, 빨간 점은 평균입니다.",
+                    help="전체 학급의 점수 분포, 최고점, 최저점, 평균을 함께 보여주는 그래프입니다. 회색 점수 분포 그래프는 학생 점수를 5점 단위로 나누어 각 구간의 학생 수를 폭으로 나타낸 것입니다. 폭이 넓을수록 그 점수 구간에 학생이 많다는 뜻입니다. 최고점과 최저점은 라벨로, 평균은 빨간 점으로 표시됩니다.",
                 )
                 dist_chart_df, summary_chart_df, class_label_expr, chart_y_max = make_class_score_distribution_chart_data(
                     analysis["individual"], analysis["class_achievement"], full_score=total_full_score, bin_size=5
@@ -3252,43 +3253,6 @@ def main() -> None:
                                             {"field": "점수구간", "type": "nominal", "title": "점수 구간"},
                                             {"field": "도수(명)", "type": "quantitative", "title": "도수(명)"},
                                         ],
-                                    },
-                                },
-                                {
-                                    "transform": [{"filter": "datum.그래프요소 == '요약'"}],
-                                    "mark": {
-                                        "type": "rect",
-                                        "color": "#111827",
-                                        "opacity": 0.95,
-                                        "clip": True,
-                                    },
-                                    "encoding": {
-                                        "x": {"field": "범위왼쪽", "type": "quantitative"},
-                                        "x2": {"field": "범위오른쪽"},
-                                        "y": {"field": "최저점", "type": "quantitative", "scale": {"domain": [0, chart_y_max], "nice": False, "zero": True}},
-                                        "y2": {"field": "최고점"},
-                                        "tooltip": [
-                                            {"field": "학급", "type": "nominal", "title": "학급"},
-                                            {"field": "최고점", "type": "quantitative", "format": ".1f", "title": "최고점"},
-                                            {"field": "평균", "type": "quantitative", "format": ".1f", "title": "평균"},
-                                            {"field": "최저점", "type": "quantitative", "format": ".1f", "title": "최저점"},
-                                        ],
-                                    },
-                                },
-                                {
-                                    "transform": [{"filter": "datum.그래프요소 == '요약'"}],
-                                    "mark": {"type": "tick", "thickness": 4, "size": 36, "color": "#111827", "clip": True},
-                                    "encoding": {
-                                        "x": {"field": "학급위치", "type": "quantitative"},
-                                        "y": {"field": "최고점", "type": "quantitative", "scale": {"domain": [0, chart_y_max], "nice": False, "zero": True}},
-                                    },
-                                },
-                                {
-                                    "transform": [{"filter": "datum.그래프요소 == '요약'"}],
-                                    "mark": {"type": "tick", "thickness": 4, "size": 36, "color": "#111827", "clip": True},
-                                    "encoding": {
-                                        "x": {"field": "학급위치", "type": "quantitative"},
-                                        "y": {"field": "최저점", "type": "quantitative", "scale": {"domain": [0, chart_y_max], "nice": False, "zero": True}},
                                     },
                                 },
                                 {
