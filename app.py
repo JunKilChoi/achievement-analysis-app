@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.102
+성취수준별 평가결과 분석 웹앱 v1.103
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -133,7 +133,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.102"
+APP_VERSION = "v1.103"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -3173,7 +3173,10 @@ def main() -> None:
 
         with graph_col1:
             with st.container(border=True):
-                st.markdown("#### 전체 분석 그래프")
+                st.subheader(
+                    "전체 분석 그래프",
+                    help="전체 학급의 점수 분포, 최고점, 최저점, 평균을 함께 보여주는 그래프입니다. 회색 점수 분포 그래프는 학생 점수를 5점 단위 구간, 예를 들어 0~5점, 5~10점, 10~15점처럼 나누어 각 구간의 학생 수를 폭으로 나타낸 것입니다. 폭이 넓을수록 그 점수 구간에 학생이 많다는 뜻입니다. 검은 세로선은 최저점~최고점, 빨간 점은 평균입니다.",
+                )
                 dist_chart_df, summary_chart_df, class_label_expr, chart_y_max = make_class_score_distribution_chart_data(
                     analysis["individual"], analysis["class_achievement"], full_score=total_full_score, bin_size=5
                 )
@@ -3353,7 +3356,10 @@ def main() -> None:
 
         with graph_col2:
             with st.container(border=True):
-                st.markdown("#### 개별 반 분석 그래프")
+                st.subheader(
+                    "개별 반 분석 그래프",
+                    help="선택한 반의 성취수준 비율을 전체 성취수준 비율과 비교하는 그래프입니다. 해당 반이 전체에 비해 A~E 수준 중 어느 구간이 많은지 확인하세요.",
+                )
                 class_values = sorted(analysis["individual"]["반"].dropna().unique().tolist())
                 if class_values:
                     selected_class_for_graph = st.selectbox(
@@ -3463,7 +3469,10 @@ def main() -> None:
                     st.info("표시할 학급 데이터가 없습니다.")
     
         with st.container(border=True):
-            st.markdown("#### 학급별 성취도")
+            st.subheader(
+                "학급별 성취도",
+                help="학급별 응시자 수, 평균, 표준편차, 최고점, 최저점, 성취수준별 인원을 비교하는 표입니다. 학급 간 평균 차이와 성취수준 분포 차이를 확인하세요.",
+            )
             st.dataframe(fmt_percent_df(analysis["class_achievement"]), use_container_width=True)
 
     elif selected_analysis_tab == "문항별 분석":
