@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.103
+성취수준별 평가결과 분석 웹앱 v1.104
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -97,6 +97,7 @@
 - v1.100: 직접 작성 프롬프트 모드의 빈 입력 안내 박스 제거
 - v1.101: 데이터 확인 항목 도움말을 추가하고 문항정보 수정 안내 문구 보강
 - v1.102: 데이터 확인 항목 도움말을 Streamlit 기본 도움말 방식으로 수정
+- v1.104: 전체 분석 그래프 도움말 문구를 조정하고 최고·최저 표시가 y축 점수값에서 벗어나지 않도록 보정
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -133,7 +134,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.103"
+APP_VERSION = "v1.104"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -808,7 +809,15 @@ def make_class_score_distribution_chart_data(individual_df: pd.DataFrame, class_
             continue
         y_max = float(full_score or max(scores.max(), 100))
         y_max = max(y_max, float(scores.max()), bin_size)
+        # 점수 분포 그래프는 5점 단위로 묶되, 마지막 구간은 과목 만점/최고점 값을 넘지 않도록 고정한다.
         bins = np.arange(0, y_max + bin_size, bin_size)
+        if len(bins) == 0 or bins[-1] < y_max:
+            bins = np.append(bins, y_max)
+        if bins[-1] > y_max:
+            bins[-1] = y_max
+        bins = np.unique(bins)
+        if len(bins) < 2:
+            bins = np.array([0.0, y_max])
         counts, edges = np.histogram(scores.clip(lower=0, upper=y_max), bins=bins)
         max_count = max(int(counts.max()), 1)
         pos = class_pos_map[str(c)]
@@ -3175,7 +3184,7 @@ def main() -> None:
             with st.container(border=True):
                 st.subheader(
                     "전체 분석 그래프",
-                    help="전체 학급의 점수 분포, 최고점, 최저점, 평균을 함께 보여주는 그래프입니다. 회색 점수 분포 그래프는 학생 점수를 5점 단위 구간, 예를 들어 0~5점, 5~10점, 10~15점처럼 나누어 각 구간의 학생 수를 폭으로 나타낸 것입니다. 폭이 넓을수록 그 점수 구간에 학생이 많다는 뜻입니다. 검은 세로선은 최저점~최고점, 빨간 점은 평균입니다.",
+                    help="전체 학급의 점수 분포, 최고점, 최저점, 평균을 함께 보여주는 그래프입니다. 회색 점수 분포 그래프는 학생 점수를 5점 단위로 나누어 각 구간의 학생 수를 폭으로 나타낸 것입니다. 폭이 넓을수록 그 점수 구간에 학생이 많다는 뜻입니다. 검은 세로선은 최저점~최고점, 빨간 점은 평균입니다.",
                 )
                 dist_chart_df, summary_chart_df, class_label_expr, chart_y_max = make_class_score_distribution_chart_data(
                     analysis["individual"], analysis["class_achievement"], full_score=total_full_score, bin_size=5
@@ -3205,6 +3214,7 @@ def main() -> None:
                                         "cornerRadius": 2,
                                         "color": "#94A3B8",
                                         "opacity": 0.8,
+                                        "clip": True,
                                     },
                                     "encoding": {
                                         "x": {
@@ -3222,7 +3232,7 @@ def main() -> None:
                                             "field": "점수구간하한",
                                             "type": "quantitative",
                                             "axis": {"title": "점수"},
-                                            "scale": {"domain": [0, chart_y_max]},
+                                            "scale": {"domain": [0, chart_y_max], "nice": False, "zero": True},
                                         },
                                         "y2": {"field": "점수구간상한"},
                                         "tooltip": [
@@ -3239,10 +3249,12 @@ def main() -> None:
                                         "strokeWidth": 5,
                                         "color": "#111827",
                                         "opacity": 0.95,
+                                        "strokeCap": "butt",
+                                        "clip": True,
                                     },
                                     "encoding": {
                                         "x": {"field": "학급위치", "type": "quantitative"},
-                                        "y": {"field": "최저점", "type": "quantitative"},
+                                        "y": {"field": "최저점", "type": "quantitative", "scale": {"domain": [0, chart_y_max], "nice": False, "zero": True}},
                                         "y2": {"field": "최고점"},
                                         "tooltip": [
                                             {"field": "학급", "type": "nominal", "title": "학급"},
@@ -3254,18 +3266,18 @@ def main() -> None:
                                 },
                                 {
                                     "transform": [{"filter": "datum.그래프요소 == '요약'"}],
-                                    "mark": {"type": "tick", "thickness": 4, "size": 36, "color": "#111827"},
+                                    "mark": {"type": "tick", "thickness": 4, "size": 36, "color": "#111827", "clip": True},
                                     "encoding": {
                                         "x": {"field": "학급위치", "type": "quantitative"},
-                                        "y": {"field": "최고점", "type": "quantitative"},
+                                        "y": {"field": "최고점", "type": "quantitative", "scale": {"domain": [0, chart_y_max], "nice": False, "zero": True}},
                                     },
                                 },
                                 {
                                     "transform": [{"filter": "datum.그래프요소 == '요약'"}],
-                                    "mark": {"type": "tick", "thickness": 4, "size": 36, "color": "#111827"},
+                                    "mark": {"type": "tick", "thickness": 4, "size": 36, "color": "#111827", "clip": True},
                                     "encoding": {
                                         "x": {"field": "학급위치", "type": "quantitative"},
-                                        "y": {"field": "최저점", "type": "quantitative"},
+                                        "y": {"field": "최저점", "type": "quantitative", "scale": {"domain": [0, chart_y_max], "nice": False, "zero": True}},
                                     },
                                 },
                                 {
@@ -3281,7 +3293,7 @@ def main() -> None:
                                     },
                                     "encoding": {
                                         "x": {"field": "학급위치", "type": "quantitative"},
-                                        "y": {"field": "최고점", "type": "quantitative"},
+                                        "y": {"field": "최고점", "type": "quantitative", "scale": {"domain": [0, chart_y_max], "nice": False, "zero": True}},
                                         "text": {"field": "최고라벨", "type": "nominal"},
                                     },
                                 },
@@ -3298,7 +3310,7 @@ def main() -> None:
                                     },
                                     "encoding": {
                                         "x": {"field": "학급위치", "type": "quantitative"},
-                                        "y": {"field": "최저점", "type": "quantitative"},
+                                        "y": {"field": "최저점", "type": "quantitative", "scale": {"domain": [0, chart_y_max], "nice": False, "zero": True}},
                                         "text": {"field": "최저라벨", "type": "nominal"},
                                     },
                                 },
@@ -3312,10 +3324,11 @@ def main() -> None:
                                         "color": "#E11D48",
                                         "stroke": "white",
                                         "strokeWidth": 2.5,
+                                        "clip": True,
                                     },
                                     "encoding": {
                                         "x": {"field": "학급위치", "type": "quantitative"},
-                                        "y": {"field": "평균", "type": "quantitative"},
+                                        "y": {"field": "평균", "type": "quantitative", "scale": {"domain": [0, chart_y_max], "nice": False, "zero": True}},
                                         "tooltip": [
                                             {"field": "학급", "type": "nominal", "title": "학급"},
                                             {"field": "평균", "type": "quantitative", "format": ".1f", "title": "평균"},
@@ -3336,7 +3349,7 @@ def main() -> None:
                                     },
                                     "encoding": {
                                         "x": {"field": "학급위치", "type": "quantitative"},
-                                        "y": {"field": "평균", "type": "quantitative"},
+                                        "y": {"field": "평균", "type": "quantitative", "scale": {"domain": [0, chart_y_max], "nice": False, "zero": True}},
                                         "text": {"field": "평균라벨", "type": "nominal"},
                                     },
                                 },
