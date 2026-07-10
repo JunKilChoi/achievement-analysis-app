@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.97
+성취수준별 평가결과 분석 웹앱 v1.98
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -92,6 +92,7 @@
 - v1.95: 파일 업로드 전 나이스 XLS data 다운로드 경로와 강의실별 정오표 저장 안내 문구 추가
 - v1.96: 파일 업로드 안내에 나이스 문항정보표가 없는 경우 앱 전용 양식 작성 후 업로드 가능 안내 문구 추가
 - v1.97: AI 분석 3종에 기본 프롬프트 보기와 기본 프롬프트 사용 방식 선택 기능 추가
+- v1.98: 기본 프롬프트 보기에서 실제 통계 데이터 블록을 제외하고 분석 지시 구조만 표시
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -128,7 +129,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.97"
+APP_VERSION = "v1.98"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1361,6 +1362,24 @@ def extract_prompt_data_context(base_prompt: str) -> str:
             end_candidates.append(idx)
     end_idx = min(end_candidates) if end_candidates else len(prompt_text)
     return prompt_text[start_idx:end_idx].strip()
+
+
+def extract_prompt_instruction_preview(base_prompt: str) -> str:
+    """웹앱 기본 프롬프트 보기에는 실제 통계 데이터가 아니라 분석 지시 구조만 표시한다."""
+    prompt_text = str(base_prompt or "").strip()
+    if not prompt_text:
+        return ""
+
+    for marker in ["다음 구조", "다음 형식"]:
+        idx = prompt_text.find(marker)
+        if idx >= 0:
+            return prompt_text[idx:].strip()
+
+    # 예외적으로 구조 안내 문구를 찾지 못하면 앱 데이터 블록은 최대한 제외하고 앞부분만 보여준다.
+    data_markers = ["[평가 정보]", "[학생]", "[고급 분석 범위]", "[원안지 파일]"]
+    data_indices = [prompt_text.find(marker) for marker in data_markers if prompt_text.find(marker) >= 0]
+    end_idx = min(data_indices) if data_indices else len(prompt_text)
+    return prompt_text[:end_idx].strip()
 
 
 def build_direct_custom_ai_prompt(base_prompt: str, custom_prompt: str, analysis_label: str) -> str:
@@ -3742,7 +3761,7 @@ def main() -> None:
                     help="웹앱 기본 프롬프트를 그대로 쓸지, 기본 프롬프트에 추가 의뢰를 붙일지, 직접 작성한 프롬프트만 쓸지 선택합니다.",
                 )
                 with st.expander("웹앱 기본 프롬프트 보기", expanded=False):
-                    st.text_area("웹앱 기본 프롬프트", base_basic_prompt, height=420)
+                    st.text_area("웹앱 기본 프롬프트", extract_prompt_instruction_preview(base_basic_prompt), height=420)
 
                 basic_focus_request = ""
                 basic_custom_prompt = ""
@@ -3922,7 +3941,7 @@ def main() -> None:
                     anonymize_student=True,
                 )
                 with st.expander("웹앱 기본 프롬프트 보기", expanded=False):
-                    st.text_area("웹앱 기본 프롬프트", base_advanced_prompt, height=460)
+                    st.text_area("웹앱 기본 프롬프트", extract_prompt_instruction_preview(base_advanced_prompt), height=460)
 
                 advanced_custom_prompt = ""
                 if advanced_prompt_mode == PROMPT_MODE_DIRECT:
