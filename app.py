@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.120
+성취수준별 평가결과 분석 웹앱 v1.121
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -114,6 +114,7 @@
 - v1.118: 모든 AI 프롬프트에 Streamlit 수식 표기 규칙을 공통 적용하고, AI 분석 결과의 LaTeX 구분자를 화면 표시용으로 자동 보정
 - v1.119: AI 분석 Word 보고서에서 LaTeX 수식을 이미지로 변환하여 문장 내·독립 수식이 정상 표시되도록 개선
 - v1.120: 업로드 파일 세션 보존, AI 결과 선저장·Word 수동 생성, 스트리밍 갱신 완화, 분석·다운로드 결과 재사용으로 앱 안정성 개선
+- v1.121: 성취수준별 문항 분석에서 하위 성취수준의 정답률이 상위 수준보다 높게 나타난 역전 구간을 연한 빨간색으로 강조
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -152,7 +153,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.120"
+APP_VERSION = "v1.121"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2706,13 +2707,60 @@ def style_standard_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
 
 
 def style_level_item_analysis_df(df: pd.DataFrame) -> pd.io.formats.style.Styler:
-    """성취수준별 문항 분석에서 수준간격차 열을 강조한다."""
+    """성취수준별 문항 분석에서 수준간격차와 정답률 역전 구간을 강조한다.
+
+    A→E 순서에서 뒤쪽의 더 낮은 성취수준 정답률이 앞쪽 수준보다 높으면,
+    역전 관계에 포함된 시작 수준부터 해당 수준까지의 유효 셀을 연한 빨간색으로 표시한다.
+    예: A~E가 100, 80, 50, 90, 30이면 B·C·D를 표시한다.
+    """
     styles = pd.DataFrame("", index=df.index, columns=df.columns)
-    highlight_cols = {"수준간격차", "수준간격차(%)", "수준 간 격차", "수준 간 격차(%)"}
+    gap_cols = {"수준간격차", "수준간격차(%)", "수준 간 격차", "수준 간 격차(%)"}
     for col in df.columns:
         name = str(col).strip()
-        if name in highlight_cols:
+        if name in gap_cols:
             styles[col] = "background-color: #fff3cd; font-weight: 700;"
+
+    level_cols = [level for level in list("ABCDE") if level in df.columns]
+
+    def to_rate(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            if pd.isna(value):
+                return None
+        except Exception:
+            pass
+        text = str(value).strip().replace(",", "")
+        if text in ["", "-"]:
+            return None
+        if text.endswith("%"):
+            text = text[:-1].strip()
+        try:
+            return float(text)
+        except Exception:
+            return None
+
+    red_style = "background-color: #f8d7da; color: #842029; font-weight: 700;"
+    for row_idx, row in df.iterrows():
+        values = [to_rate(row.get(col)) for col in level_cols]
+        inverted_cols = set()
+
+        for right_idx in range(1, len(level_cols)):
+            right_value = values[right_idx]
+            if right_value is None:
+                continue
+            for left_idx in range(right_idx):
+                left_value = values[left_idx]
+                if left_value is None or right_value <= left_value + 1e-12:
+                    continue
+                # 역전된 두 수준 사이의 유효한 성취수준 셀을 모두 표시한다.
+                for span_idx in range(left_idx, right_idx + 1):
+                    if values[span_idx] is not None:
+                        inverted_cols.add(level_cols[span_idx])
+
+        for col in inverted_cols:
+            styles.at[row_idx, col] = red_style
+
     return df.style.apply(lambda _: styles, axis=None)
 
 
@@ -4065,7 +4113,9 @@ def main() -> None:
             )
             st.info(
                 "A~E 열은 각 성취수준 학생들의 문항별 정답률입니다. "
-                "기본 정렬은 문항번호 순이며, 해당 성취수준 학생이 없는 경우에는 '-'로 표시됩니다."
+                "기본 정렬은 문항번호 순이며, 해당 성취수준 학생이 없는 경우에는 '-'로 표시됩니다. "
+                "연한 빨간색 구간은 뒤쪽의 더 낮은 성취수준 정답률이 앞쪽 수준보다 높아 "
+                "A ≥ B ≥ C ≥ D ≥ E 순서가 역전된 범위입니다."
             )
             level_df = analysis.get("level_item", pd.DataFrame()).copy()
             if level_df.empty:
