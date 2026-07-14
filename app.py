@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.121
+성취수준별 평가결과 분석 웹앱 v1.122
 
 버전 기록
+- v1.122: AI 분석 Word 보고서에서 축약형 LaTeX 분수(예: \frac32)를 표준 분수 형식으로 정규화하고, 문장 안의 **굵게** Markdown도 Word 서식으로 변환하여 수식과 강조 표시가 정상 출력되도록 개선
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
 - v1.2: 화면·AI 프롬프트·엑셀 출력의 정답률/비율/변별도/수준간격차를 % 기준으로 표시
 - v1.3: 표 화면/엑셀 출력에서 비율값은 52.3%처럼 데이터에 %를 포함하고, 헤더에 (명)/(점)/(%) 단위 표시
@@ -153,7 +154,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.121"
+APP_VERSION = "v1.122"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1477,23 +1478,42 @@ def append_math_format_rule(prompt: str) -> str:
     return f"{prompt_text}\n\n{MATH_FORMAT_RULE}".strip()
 
 
-def normalize_ai_math_markdown(text: str) -> str:
-    """AI가 출력한 LaTeX 구분자를 Streamlit Markdown 수식 형식으로 변환한다."""
+def normalize_common_latex_syntax(text: str) -> str:
+    """웹 표시와 Word 변환에서 공통으로 사용할 수 있도록 흔한 LaTeX 표현을 정리한다."""
     if not text:
         return ""
 
     normalized = str(text)
+    normalized = normalized.replace(r"\dfrac", r"\frac")
+    normalized = normalized.replace(r"\tfrac", r"\frac")
+    normalized = normalized.replace(r"\displaystyle", "")
+
+    # 축약형 분수(예: \frac32, \frac ab, \frac x2)를 표준형으로 정리한다.
+    normalized = re.sub(
+        r"\\frac\s*([A-Za-z0-9])\s*([A-Za-z0-9])",
+        lambda m: rf"\frac{{{m.group(1)}}}{{{m.group(2)}}}",
+        normalized,
+    )
+    return normalized
+
+
+def normalize_ai_math_markdown(text: str) -> str:
+    """AI가 출력한 LaTeX 구분자를 Streamlit Markdown 수식 형식으로 변환하고 흔한 수식 표현을 정리한다."""
+    if not text:
+        return ""
+
+    normalized = normalize_common_latex_syntax(str(text))
     # 독립 수식: \[ ... \] -> $$ ... $$
     normalized = re.sub(
         r"\\\[(.*?)\\\]",
-        lambda m: f"\n\n$$\n{m.group(1).strip()}\n$$\n\n",
+        lambda m: f"\n\n$$\n{normalize_common_latex_syntax(m.group(1).strip())}\n$$\n\n",
         normalized,
         flags=re.DOTALL,
     )
     # 문장 안 수식: \( ... \) -> $ ... $
     normalized = re.sub(
         r"\\\((.*?)\\\)",
-        lambda m: f"${m.group(1).strip()}$",
+        lambda m: f"${normalize_common_latex_syntax(m.group(1).strip())}$",
         normalized,
         flags=re.DOTALL,
     )
@@ -2204,13 +2224,10 @@ def make_ai_report_docx(
 
     def clean_math_expression(expression: str) -> str:
         """matplotlib MathText가 처리하기 쉽도록 흔한 LaTeX 표현을 정리한다."""
-        cleaned = str(expression or "").strip()
-        cleaned = re.sub(r"\\begin\{(?:aligned|align\*?|equation\*?)\}", "", cleaned)
-        cleaned = re.sub(r"\\end\{(?:aligned|align\*?|equation\*?)\}", "", cleaned)
+        cleaned = normalize_common_latex_syntax(str(expression or "").strip())
+        cleaned = re.sub(r"\begin\{(?:aligned|align\*?|equation\*?)\}", "", cleaned)
+        cleaned = re.sub(r"\end\{(?:aligned|align\*?|equation\*?)\}", "", cleaned)
         cleaned = cleaned.replace("&", "")
-        cleaned = cleaned.replace(r"\dfrac", r"\frac")
-        cleaned = cleaned.replace(r"\tfrac", r"\frac")
-        cleaned = cleaned.replace(r"\displaystyle", "")
         return cleaned.strip()
 
     def render_math_png(expression: str, display: bool = False) -> Optional[io.BytesIO]:
@@ -2262,6 +2279,31 @@ def make_ai_report_docx(
 
     inline_math_pattern = re.compile(r"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)")
 
+    def add_text_runs_with_markdown(
+        paragraph: Any,
+        text_segment: str,
+        *,
+        base_bold: bool = False,
+        font_size: Optional[float] = None,
+    ) -> None:
+        """문장 안의 **굵게** Markdown을 Word 굵은 글씨 run으로 변환한다."""
+        parts = re.split(r"(\*\*.*?\*\*|__.*?__)", str(text_segment), flags=re.DOTALL)
+        for part in parts:
+            if part == "":
+                continue
+            is_bold_part = False
+            content = part
+            if len(part) >= 4 and ((part.startswith("**") and part.endswith("**")) or (part.startswith("__") and part.endswith("__"))):
+                is_bold_part = True
+                content = part[2:-2]
+            if content == "":
+                continue
+            text_run = paragraph.add_run(content)
+            text_run.bold = base_bold or is_bold_part
+            text_run.font.name = "맑은 고딕"
+            if font_size is not None:
+                text_run.font.size = Pt(font_size)
+
     def add_inline_math_runs(
         paragraph: Any,
         text_value: str,
@@ -2269,30 +2311,34 @@ def make_ai_report_docx(
         bold: bool = False,
         font_size: Optional[float] = None,
     ) -> None:
-        """일반 텍스트와 문장 내 LaTeX 수식을 하나의 Word 문단에 순서대로 넣는다."""
-        normalized = re.sub(r"\\\((.*?)\\\)", lambda m: f"${m.group(1).strip()}$", str(text_value), flags=re.DOTALL)
+        """일반 텍스트, 굵게 Markdown, 문장 내 LaTeX 수식을 하나의 Word 문단에 순서대로 넣는다."""
+        normalized = normalize_ai_math_markdown(str(text_value))
         cursor = 0
         for match in inline_math_pattern.finditer(normalized):
             if match.start() > cursor:
-                text_run = paragraph.add_run(normalized[cursor:match.start()])
-                text_run.bold = bold
-                text_run.font.name = "맑은 고딕"
-                if font_size is not None:
-                    text_run.font.size = Pt(font_size)
+                add_text_runs_with_markdown(
+                    paragraph,
+                    normalized[cursor:match.start()],
+                    base_bold=bold,
+                    font_size=font_size,
+                )
             math_run = paragraph.add_run()
             if not add_math_picture(math_run, match.group(1), display=False):
-                fallback = paragraph.add_run(match.group(0))
-                fallback.bold = bold
-                fallback.font.name = "맑은 고딕"
-                if font_size is not None:
-                    fallback.font.size = Pt(font_size)
+                add_text_runs_with_markdown(
+                    paragraph,
+                    match.group(0),
+                    base_bold=bold,
+                    font_size=font_size,
+                )
             cursor = match.end()
         if cursor < len(normalized):
-            text_run = paragraph.add_run(normalized[cursor:])
-            text_run.bold = bold
-            text_run.font.name = "맑은 고딕"
-            if font_size is not None:
-                text_run.font.size = Pt(font_size)
+            add_text_runs_with_markdown(
+                paragraph,
+                normalized[cursor:],
+                base_bold=bold,
+                font_size=font_size,
+            )
+
 
     def add_display_math(expression: str) -> None:
         """독립 수식을 가운데 정렬된 이미지로 추가한다."""
