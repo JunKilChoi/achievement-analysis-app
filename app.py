@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.119
+성취수준별 평가결과 분석 웹앱 v1.120
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -113,6 +113,7 @@
 - v1.117: 성취수준별 문항 분석에 표 읽는 법과 성취수준별 차이 해석 도움말 툴팁 추가
 - v1.118: 모든 AI 프롬프트에 Streamlit 수식 표기 규칙을 공통 적용하고, AI 분석 결과의 LaTeX 구분자를 화면 표시용으로 자동 보정
 - v1.119: AI 분석 Word 보고서에서 LaTeX 수식을 이미지로 변환하여 문장 내·독립 수식이 정상 표시되도록 개선
+- v1.120: 업로드 파일 세션 보존, AI 결과 선저장·Word 수동 생성, 스트리밍 갱신 완화, 분석·다운로드 결과 재사용으로 앱 안정성 개선
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -132,7 +133,9 @@ from __future__ import annotations
 import hashlib
 import html
 import io
+import math
 import re
+import time
 import zipfile
 from datetime import datetime
 from dataclasses import dataclass
@@ -149,7 +152,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.119"
+APP_VERSION = "v1.120"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1843,13 +1846,26 @@ def call_openai(api_key: str, model: str, prompt: str) -> str:
     return getattr(resp, "output_text", "").strip()
 
 
+def _render_stream_progress(placeholder: Any, full_text: str, force: bool, last_render_at: float, last_render_length: int) -> Tuple[float, int]:
+    """스트리밍 중 화면 갱신 횟수를 제한하여 WebSocket과 브라우저 렌더링 부담을 줄인다."""
+    now = time.monotonic()
+    should_render = force or (len(full_text) - last_render_length >= 160) or (now - last_render_at >= 0.4)
+    if should_render:
+        suffix = "" if force else "▌"
+        placeholder.markdown(normalize_ai_math_markdown(full_text) + suffix)
+        return now, len(full_text)
+    return last_render_at, last_render_length
+
+
 def call_openai_stream(api_key: str, model: str, prompt: str, placeholder) -> str:
-    """OpenAI Responses API를 스트리밍으로 호출하고, 생성 중인 본문을 화면에 즉시 표시한다."""
+    """OpenAI Responses API를 스트리밍으로 호출하고, 생성 중인 본문을 과도하지 않게 갱신한다."""
     if OpenAI is None:
         raise RuntimeError("openai 라이브러리를 불러오지 못했습니다. requirements.txt에 openai가 포함되어 있는지 확인하세요.")
 
     client = OpenAI(api_key=api_key)
     full_text = ""
+    last_render_at = time.monotonic()
+    last_render_length = 0
 
     with client.responses.stream(
         model=model,
@@ -1861,12 +1877,14 @@ def call_openai_stream(api_key: str, model: str, prompt: str, placeholder) -> st
             if event_type == "response.output_text.delta":
                 delta = getattr(event, "delta", "") or ""
                 full_text += delta
-                placeholder.markdown(normalize_ai_math_markdown(full_text) + "▌")
+                last_render_at, last_render_length = _render_stream_progress(
+                    placeholder, full_text, False, last_render_at, last_render_length
+                )
 
         final_response = stream.get_final_response()
 
     final_text = (getattr(final_response, "output_text", "") or full_text).strip()
-    placeholder.markdown(normalize_ai_math_markdown(final_text))
+    _render_stream_progress(placeholder, final_text, True, last_render_at, last_render_length)
     return final_text
 
 
@@ -1888,6 +1906,8 @@ def call_openai_stream_with_pdf(api_key: str, model: str, prompt: str, pdf_bytes
         raise RuntimeError("원안지 PDF 파일 업로드에 실패했습니다.")
 
     full_text = ""
+    last_render_at = time.monotonic()
+    last_render_length = 0
     response_input = [
         {
             "role": "user",
@@ -1908,12 +1928,14 @@ def call_openai_stream_with_pdf(api_key: str, model: str, prompt: str, pdf_bytes
             if event_type == "response.output_text.delta":
                 delta = getattr(event, "delta", "") or ""
                 full_text += delta
-                placeholder.markdown(normalize_ai_math_markdown(full_text) + "▌")
+                last_render_at, last_render_length = _render_stream_progress(
+                    placeholder, full_text, False, last_render_at, last_render_length
+                )
 
         final_response = stream.get_final_response()
 
     final_text = (getattr(final_response, "output_text", "") or full_text).strip()
-    placeholder.markdown(normalize_ai_math_markdown(final_text))
+    _render_stream_progress(placeholder, final_text, True, last_render_at, last_render_length)
     return final_text
 
 
@@ -2346,6 +2368,41 @@ def bytes_to_uploaded_like(data: bytes) -> io.BytesIO:
     bio = io.BytesIO(data)
     bio.seek(0)
     return bio
+
+
+def stored_file_to_uploaded_like(item: Optional[Dict[str, Any]]) -> Optional[io.BytesIO]:
+    """세션에 저장한 파일 바이트를 업로드 파일처럼 다시 사용할 수 있게 복원한다."""
+    if not item or not item.get("data"):
+        return None
+    bio = bytes_to_uploaded_like(item["data"])
+    bio.name = str(item.get("name", "uploaded_file"))
+    return bio
+
+
+def make_runtime_analysis_signature(parsed: ParsedData, total_full_score: float, cuts: Dict[str, float]) -> str:
+    """같은 입력과 분석 기준에서는 분석·다운로드 결과를 재사용하기 위한 내용 서명."""
+    h = hashlib.sha256()
+    for df in [parsed.question_df, parsed.students_df]:
+        normalized = df.copy().fillna("").astype(str)
+        h.update("|".join(map(str, normalized.columns)).encode("utf-8"))
+        h.update(pd.util.hash_pandas_object(normalized, index=True).values.tobytes())
+    h.update(repr(sorted((str(k), str(v)) for k, v in parsed.exam_info.items())).encode("utf-8"))
+    h.update(f"{float(total_full_score):.8f}".encode("utf-8"))
+    h.update(repr(sorted((str(k), float(v)) for k, v in cuts.items())).encode("utf-8"))
+    return h.hexdigest()
+
+
+def clone_parsed_data(parsed: ParsedData) -> ParsedData:
+    """세션에 보관한 원본 파싱 결과를 현재 실행에서 안전하게 수정할 수 있도록 복제한다."""
+    return ParsedData(
+        exam_info=dict(parsed.exam_info),
+        question_df=parsed.question_df.copy(deep=True),
+        students_df=parsed.students_df.copy(deep=True),
+        long_df=parsed.long_df.copy(deep=True),
+        validation_df=parsed.validation_df.copy(deep=True),
+        answer_key_df=parsed.answer_key_df.copy(deep=True),
+        original_question_df=parsed.original_question_df.copy(deep=True) if parsed.original_question_df is not None else None,
+    )
 
 
 def preview_answer_file(data: bytes) -> Dict[str, Any]:
@@ -2802,12 +2859,56 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
+    if "question_file_store" not in st.session_state:
+        st.session_state.question_file_store = None
     if "answer_file_store" not in st.session_state:
         st.session_state.answer_file_store = {}
+    if "question_uploader_nonce" not in st.session_state:
+        st.session_state.question_uploader_nonce = 0
+    if "answer_uploader_nonce" not in st.session_state:
+        st.session_state.answer_uploader_nonce = 0
+
+    question_upload_key = f"question_file_{st.session_state.question_uploader_nonce}"
+    answer_upload_key = f"answer_files_{st.session_state.answer_uploader_nonce}"
 
     left, right = st.columns(2)
     with left:
-        question_file = st.file_uploader("문항정보표 업로드", type=["xlsx"], key="question_file")
+        uploaded_question_file = st.file_uploader("문항정보표 업로드", type=["xlsx"], key=question_upload_key)
+        if uploaded_question_file is not None:
+            q_data = uploaded_question_file.getvalue()
+            q_sig = hashlib.sha256(q_data).hexdigest()
+            old_q_sig = (st.session_state.question_file_store or {}).get("signature")
+            if q_sig != old_q_sig:
+                st.session_state.question_file_store = {
+                    "name": uploaded_question_file.name,
+                    "size": uploaded_question_file.size,
+                    "data": q_data,
+                    "signature": q_sig,
+                }
+                for cache_key in [
+                    "base_parsed_upload_signature", "base_parsed_value",
+                    "runtime_analysis_signature", "runtime_analysis_value",
+                    "export_files_signature", "export_confirm_bytes", "export_zip_bytes",
+                ]:
+                    st.session_state.pop(cache_key, None)
+
+        question_file = stored_file_to_uploaded_like(st.session_state.question_file_store)
+        if question_file is not None:
+            q_store = st.session_state.question_file_store
+            st.caption(f"현재 분석에 사용 중인 문항정보표: {q_store.get('name', '')}")
+            if st.button("문항정보표 초기화", key="reset_question_file_store", use_container_width=True):
+                st.session_state.question_file_store = None
+                st.session_state.question_uploader_nonce += 1
+                for key in [
+                    "question_info_editor_signature", "question_info_editor_df", "question_info_editor_applied_at",
+                    "auto_recognition_editor_signature", "auto_recognition_editor_values",
+                    "base_parsed_upload_signature", "base_parsed_value",
+                    "runtime_analysis_signature", "runtime_analysis_value",
+                    "export_files_signature", "export_confirm_bytes", "export_zip_bytes",
+                ]:
+                    st.session_state.pop(key, None)
+                st.rerun()
+
         st.download_button(
             "문항정보표 양식 다운하기",
             make_question_info_template_xlsx(),
@@ -2822,7 +2923,7 @@ def main() -> None:
             "학생답 정오표 업로드",
             type=["xlsx"],
             accept_multiple_files=True,
-            key="answer_files",
+            key=answer_upload_key,
             help="1반 파일을 먼저 올린 뒤 2반 파일을 추가로 올려도 되고, 여러 파일을 한꺼번에 선택해도 됩니다. 같은 파일은 자동으로 중복 제외됩니다.",
         )
 
@@ -2845,6 +2946,12 @@ def main() -> None:
                 "question_count": preview.get("question_count", 0),
                 "classes": preview.get("classes", []),
             }
+            for cache_key in [
+                "base_parsed_upload_signature", "base_parsed_value",
+                "runtime_analysis_signature", "runtime_analysis_value",
+                "export_files_signature", "export_confirm_bytes", "export_zip_bytes",
+            ]:
+                st.session_state.pop(cache_key, None)
             added_files.append(f.name)
         except Exception as e:
             failed_files.append({"파일명": f.name, "실패 사유": str(e)})
@@ -2871,15 +2978,21 @@ def main() -> None:
             if failed_files:
                 st.warning(f"정오표 {len(failed_files)}개는 읽지 못해 제외했습니다.")
                 st.dataframe(pd.DataFrame(failed_files), use_container_width=True, hide_index=True)
-            if st.button("정오표 목록 초기화"):
+            if st.button("정오표 목록 초기화", key="reset_answer_file_store"):
                 st.session_state.answer_file_store = {}
+                st.session_state.answer_uploader_nonce += 1
+                for cache_key in [
+                    "base_parsed_upload_signature", "base_parsed_value",
+                    "runtime_analysis_signature", "runtime_analysis_value",
+                    "export_files_signature", "export_confirm_bytes", "export_zip_bytes",
+                ]:
+                    st.session_state.pop(cache_key, None)
                 st.rerun()
 
     answer_files = list(st.session_state.answer_file_store.values())
 
-    # 문항정보표를 파일 업로더에서 제거한 경우에는 편집 세션을 함께 초기화합니다.
-    # 같은 문항정보표 파일을 다시 올렸을 때 이전에 삭제/수정한 문항이 남지 않고,
-    # 엑셀 원본을 새로 읽어 오도록 하기 위한 처리입니다.
+    # 문항정보표는 업로드 직후 파일 바이트를 세션에 보관한다.
+    # 일반적인 위젯 재실행에서 업로더 값이 잠시 비어도 저장된 파일로 분석을 계속한다.
     if not question_file:
         for key in [
             "question_info_editor_signature",
@@ -2921,13 +3034,23 @@ def main() -> None:
         st.info("문항정보표와 학생답 정오표를 모두 업로드하면 자동 분석을 시작합니다. 정오표는 여러 개 업로드할 수 있습니다.")
         return
 
+    upload_bundle_signature = make_question_editor_signature(question_file, answer_files)
     try:
-        parsed = prepare_parsed(question_file, answer_files)
+        if (
+            st.session_state.get("base_parsed_upload_signature") == upload_bundle_signature
+            and isinstance(st.session_state.get("base_parsed_value"), ParsedData)
+        ):
+            parsed = clone_parsed_data(st.session_state["base_parsed_value"])
+        else:
+            base_parsed = prepare_parsed(question_file, answer_files)
+            st.session_state["base_parsed_upload_signature"] = upload_bundle_signature
+            st.session_state["base_parsed_value"] = base_parsed
+            parsed = clone_parsed_data(base_parsed)
     except Exception as e:
         st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
         st.stop()
 
-    auto_info_signature = make_question_editor_signature(question_file, answer_files)
+    auto_info_signature = upload_bundle_signature
     auto_info_sig_key = "auto_recognition_editor_signature"
     auto_info_state_key = "auto_recognition_editor_values"
 
@@ -3301,7 +3424,18 @@ def main() -> None:
     cut_d = c4.number_input("D/E 분할점수", value=round(total_full_score * 0.6, 1), step=1.0, key="cut_d_raw")
     cuts = {"A": cut_a, "B": cut_b, "C": cut_c, "D": cut_d}
 
-    analysis = analyze_all(parsed, total_full_score, cuts)
+    analysis_signature = make_runtime_analysis_signature(parsed, total_full_score, cuts)
+    if (
+        st.session_state.get("runtime_analysis_signature") == analysis_signature
+        and isinstance(st.session_state.get("runtime_analysis_value"), dict)
+    ):
+        analysis = st.session_state["runtime_analysis_value"]
+    else:
+        analysis = analyze_all(parsed, total_full_score, cuts)
+        st.session_state["runtime_analysis_signature"] = analysis_signature
+        st.session_state["runtime_analysis_value"] = analysis
+        for cache_key in ["export_files_signature", "export_confirm_bytes", "export_zip_bytes"]:
+            st.session_state.pop(cache_key, None)
 
     warn_df = parsed.validation_df[parsed.validation_df["검증결과"] == "확인 필요"] if not parsed.validation_df.empty else pd.DataFrame()
     if warn_df.empty:
@@ -4083,13 +4217,13 @@ def main() -> None:
                 docx_state_key = "basic_ai_docx_bytes"
                 filename_state_key = "basic_ai_docx_filename"
                 meta_state_key = "basic_ai_result_meta"
+                focus_state_key = "basic_ai_report_focus_request"
                 context_state_key = "basic_ai_result_context"
                 basic_context = hashlib.sha1(f"{basic_mode}|{basic_prompt}".encode("utf-8")).hexdigest()
 
                 # 분석 유형·학생·프롬프트가 바뀌면 이전 결과를 현재 화면에서 제거한다.
-                # 다운로드 버튼 클릭으로 인한 재실행에서는 context가 같으므로 결과가 유지된다.
                 if st.session_state.get(context_state_key) and st.session_state.get(context_state_key) != basic_context:
-                    for _key in [result_state_key, docx_state_key, filename_state_key, meta_state_key, context_state_key]:
+                    for _key in [result_state_key, docx_state_key, filename_state_key, meta_state_key, focus_state_key, context_state_key]:
                         st.session_state.pop(_key, None)
 
                 basic_just_ran = False
@@ -4100,12 +4234,8 @@ def main() -> None:
                         st.error("직접 작성한 프롬프트만 사용하려면 분석 지시문을 입력하세요.")
                     else:
                         try:
-                            # 새 분석을 시작할 때만 기존 결과를 지우고, 다운로드 버튼 클릭으로 인한 rerun에서는 유지한다.
-                            st.session_state.pop(result_state_key, None)
-                            st.session_state.pop(docx_state_key, None)
-                            st.session_state.pop(filename_state_key, None)
-                            st.session_state.pop(meta_state_key, None)
-                            st.session_state.pop(context_state_key, None)
+                            for _key in [result_state_key, docx_state_key, filename_state_key, meta_state_key, focus_state_key, context_state_key]:
+                                st.session_state.pop(_key, None)
                             basic_just_ran = True
 
                             st.markdown("#### 기본 분석 결과")
@@ -4113,46 +4243,78 @@ def main() -> None:
                             result_placeholder = st.empty()
                             result = call_openai_stream(api_key, model, basic_prompt, result_placeholder)
 
-                            if len(result.strip()) < 300:
-                                st.warning("AI 응답이 예상보다 짧습니다. 모델 출력 제한, API 오류, 프롬프트 입력량을 확인해 주세요.")
-
-                            report_title = "성취수준별 평가결과 AI 분석 보고서"
+                            # Word 생성보다 먼저 AI 원문을 저장하여, 후속 작업 오류가 발생해도 분석 결과를 보존한다.
                             report_type = f"기본 분석: {basic_mode}"
-                            docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type, focus_request=basic_report_focus_request)
-
                             st.session_state[result_state_key] = result
-                            st.session_state[docx_state_key] = docx_bytes
                             st.session_state[filename_state_key] = basic_download_name
                             st.session_state[meta_state_key] = report_type
+                            st.session_state[focus_state_key] = basic_report_focus_request
                             st.session_state[context_state_key] = basic_context
-                            st.download_button(
-                                "기본 분석 결과 Word 다운로드",
-                                docx_bytes,
-                                basic_download_name,
-                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                use_container_width=True,
-                                key="download_basic_ai_docx_fresh",
-                            )
+
+                            if len(result.strip()) < 300:
+                                st.warning("AI 응답이 예상보다 짧습니다. 모델 출력 제한, API 오류, 프롬프트 입력량을 확인해 주세요.")
                         except Exception as e:
                             st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
 
-                if st.session_state.get(result_state_key) and not basic_just_ran:
-                    st.markdown("#### 저장된 기본 분석 결과")
-                    st.markdown(normalize_ai_math_markdown(st.session_state[result_state_key]))
-                    st.download_button(
-                        "기본 분석 결과 Word 다운로드",
-                        st.session_state[docx_state_key],
-                        st.session_state.get(filename_state_key, basic_download_name),
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True,
-                        key="download_basic_ai_docx_persisted",
-                    )
+                if st.session_state.get(result_state_key):
+                    if not basic_just_ran:
+                        st.markdown("#### 저장된 기본 분석 결과")
+                        st.markdown(normalize_ai_math_markdown(st.session_state[result_state_key]))
+
+                    if st.button("기본 분석 Word 보고서 만들기", key="build_basic_ai_docx", use_container_width=True):
+                        try:
+                            with st.spinner("Word 보고서를 만드는 중입니다..."):
+                                docx_bytes = make_ai_report_docx(
+                                    parsed,
+                                    analysis,
+                                    "성취수준별 평가결과 AI 분석 보고서",
+                                    st.session_state[result_state_key],
+                                    report_type=st.session_state.get(meta_state_key, f"기본 분석: {basic_mode}"),
+                                    focus_request=st.session_state.get(focus_state_key, ""),
+                                )
+                            st.session_state[docx_state_key] = docx_bytes
+                            st.success("Word 보고서를 만들었습니다. 아래 버튼으로 다운로드하세요.")
+                        except Exception as e:
+                            st.error(f"Word 보고서를 만드는 중 오류가 발생했습니다: {e}")
+
+                    if st.session_state.get(docx_state_key):
+                        st.download_button(
+                            "기본 분석 결과 Word 다운로드",
+                            st.session_state[docx_state_key],
+                            st.session_state.get(filename_state_key, basic_download_name),
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                            key="download_basic_ai_docx_persisted",
+                        )
 
         elif ai_section_mode == "고급 분석: 원안지 기반 심층 해석":
             with st.container(border=True):
                 st.markdown("#### 고급 분석: 원안지 기반 심층 해석")
                 st.markdown("원안지 PDF를 업로드한 뒤, 프롬프트 사용 방식과 필요 시 중점 분석 요청 프리셋을 고르고 문항 내용 기반 심층 분석을 생성합니다.")
-                source_pdf = st.file_uploader("원안지 PDF 업로드", type=["pdf"], key="source_exam_pdf")
+                if "source_pdf_store" not in st.session_state:
+                    st.session_state.source_pdf_store = None
+                if "source_pdf_uploader_nonce" not in st.session_state:
+                    st.session_state.source_pdf_uploader_nonce = 0
+                source_pdf_upload_key = f"source_exam_pdf_{st.session_state.source_pdf_uploader_nonce}"
+                uploaded_source_pdf = st.file_uploader("원안지 PDF 업로드", type=["pdf"], key=source_pdf_upload_key)
+                if uploaded_source_pdf is not None:
+                    pdf_bytes_uploaded = uploaded_source_pdf.getvalue()
+                    pdf_sig = hashlib.sha256(pdf_bytes_uploaded).hexdigest()
+                    old_pdf_sig = (st.session_state.source_pdf_store or {}).get("signature")
+                    if pdf_sig != old_pdf_sig:
+                        st.session_state.source_pdf_store = {
+                            "name": uploaded_source_pdf.name,
+                            "size": uploaded_source_pdf.size,
+                            "data": pdf_bytes_uploaded,
+                            "signature": pdf_sig,
+                        }
+                source_pdf = stored_file_to_uploaded_like(st.session_state.source_pdf_store)
+                if source_pdf is not None:
+                    st.caption(f"현재 분석에 사용 중인 원안지 PDF: {source_pdf.name}")
+                    if st.button("원안지 PDF 초기화", key="reset_source_pdf_store", use_container_width=True):
+                        st.session_state.source_pdf_store = None
+                        st.session_state.source_pdf_uploader_nonce += 1
+                        st.rerun()
 
                 advanced_prompt_mode = st.radio(
                     "프롬프트 사용 방식",
@@ -4253,13 +4415,15 @@ def main() -> None:
                 adv_docx_state_key = "advanced_ai_docx_bytes"
                 adv_filename_state_key = "advanced_ai_docx_filename"
                 adv_meta_state_key = "advanced_ai_result_meta"
+                adv_focus_state_key = "advanced_ai_report_focus_request"
                 adv_context_state_key = "advanced_ai_result_context"
                 pdf_context_name = source_pdf.name if source_pdf is not None else ""
-                advanced_context = hashlib.sha1(f"{advanced_scope}|{item_number_raw}|{advanced_student_key}|{pdf_context_name}|{advanced_prompt}".encode("utf-8")).hexdigest()
+                pdf_context_signature = (st.session_state.get("source_pdf_store") or {}).get("signature", "")
+                advanced_context = hashlib.sha1(f"{advanced_scope}|{item_number_raw}|{advanced_student_key}|{pdf_context_name}|{pdf_context_signature}|{advanced_prompt}".encode("utf-8")).hexdigest()
 
                 # 프리셋·문항번호·PDF가 바뀌면 이전 고급 분석 결과를 현재 화면에서 제거한다.
                 if st.session_state.get(adv_context_state_key) and st.session_state.get(adv_context_state_key) != advanced_context:
-                    for _key in [adv_result_state_key, adv_docx_state_key, adv_filename_state_key, adv_meta_state_key, adv_context_state_key]:
+                    for _key in [adv_result_state_key, adv_docx_state_key, adv_filename_state_key, adv_meta_state_key, adv_focus_state_key, adv_context_state_key]:
                         st.session_state.pop(_key, None)
 
                 advanced_just_ran = False
@@ -4273,11 +4437,8 @@ def main() -> None:
                         st.error("직접 작성한 프롬프트만 사용하려면 분석 지시문을 입력하세요.")
                     else:
                         try:
-                            st.session_state.pop(adv_result_state_key, None)
-                            st.session_state.pop(adv_docx_state_key, None)
-                            st.session_state.pop(adv_filename_state_key, None)
-                            st.session_state.pop(adv_meta_state_key, None)
-                            st.session_state.pop(adv_context_state_key, None)
+                            for _key in [adv_result_state_key, adv_docx_state_key, adv_filename_state_key, adv_meta_state_key, adv_focus_state_key, adv_context_state_key]:
+                                st.session_state.pop(_key, None)
                             advanced_just_ran = True
 
                             pdf_bytes = source_pdf.getvalue()
@@ -4286,46 +4447,59 @@ def main() -> None:
                             result_placeholder = st.empty()
                             result = call_openai_stream_with_pdf(api_key, model, advanced_prompt, pdf_bytes, source_pdf.name, result_placeholder)
 
-                            if len(result.strip()) < 300:
-                                st.warning("AI 응답이 예상보다 짧습니다. PDF 인식, 모델 출력 제한, API 오류, 프롬프트 입력량을 확인해 주세요.")
-
-                            report_title = "성취수준별 평가결과 원안지 기반 고급 분석 보고서"
+                            # Word 생성보다 먼저 AI 원문을 저장하여 후속 작업과 분리한다.
                             report_type = f"고급 분석: {advanced_scope}"
-                            docx_bytes = make_ai_report_docx(parsed, analysis, report_title, result, report_type=report_type, focus_request=advanced_report_focus_request)
-
                             st.session_state[adv_result_state_key] = result
-                            st.session_state[adv_docx_state_key] = docx_bytes
                             st.session_state[adv_filename_state_key] = "AI_고급분석_원안지기반심층해석.docx"
                             st.session_state[adv_meta_state_key] = report_type
+                            st.session_state[adv_focus_state_key] = advanced_report_focus_request
                             st.session_state[adv_context_state_key] = advanced_context
-                            st.download_button(
-                                "고급 분석 결과 Word 다운로드",
-                                docx_bytes,
-                                "AI_고급분석_원안지기반심층해석.docx",
-                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                use_container_width=True,
-                                key="download_advanced_ai_docx_fresh",
-                            )
+
+                            if len(result.strip()) < 300:
+                                st.warning("AI 응답이 예상보다 짧습니다. PDF 인식, 모델 출력 제한, API 오류, 프롬프트 입력량을 확인해 주세요.")
                         except Exception as e:
                             st.error(f"고급 분석 중 오류가 발생했습니다: {e}")
 
-                if st.session_state.get(adv_result_state_key) and not advanced_just_ran:
-                    st.markdown("#### 저장된 고급 분석 결과")
-                    st.markdown(normalize_ai_math_markdown(st.session_state[adv_result_state_key]))
-                    st.download_button(
-                        "고급 분석 결과 Word 다운로드",
-                        st.session_state[adv_docx_state_key],
-                        st.session_state.get(adv_filename_state_key, "AI_고급분석_원안지기반심층해석.docx"),
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True,
-                        key="download_advanced_ai_docx_persisted",
-                    )
+                if st.session_state.get(adv_result_state_key):
+                    if not advanced_just_ran:
+                        st.markdown("#### 저장된 고급 분석 결과")
+                        st.markdown(normalize_ai_math_markdown(st.session_state[adv_result_state_key]))
+
+                    if st.button("고급 분석 Word 보고서 만들기", key="build_advanced_ai_docx", use_container_width=True):
+                        try:
+                            with st.spinner("Word 보고서를 만드는 중입니다..."):
+                                docx_bytes = make_ai_report_docx(
+                                    parsed,
+                                    analysis,
+                                    "성취수준별 평가결과 원안지 기반 고급 분석 보고서",
+                                    st.session_state[adv_result_state_key],
+                                    report_type=st.session_state.get(adv_meta_state_key, f"고급 분석: {advanced_scope}"),
+                                    focus_request=st.session_state.get(adv_focus_state_key, ""),
+                                )
+                            st.session_state[adv_docx_state_key] = docx_bytes
+                            st.success("Word 보고서를 만들었습니다. 아래 버튼으로 다운로드하세요.")
+                        except Exception as e:
+                            st.error(f"Word 보고서를 만드는 중 오류가 발생했습니다: {e}")
+
+                    if st.session_state.get(adv_docx_state_key):
+                        st.download_button(
+                            "고급 분석 결과 Word 다운로드",
+                            st.session_state[adv_docx_state_key],
+                            st.session_state.get(adv_filename_state_key, "AI_고급분석_원안지기반심층해석.docx"),
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                            key="download_advanced_ai_docx_persisted",
+                        )
 
     st.markdown("<div class='big-section-gap'></div>", unsafe_allow_html=True)
     render_step_header("4", "다운로드", "확인용 입력자료와 5종 분석 결과를 엑셀 파일로 내려받습니다.")
     d1, d2 = st.columns(2)
-    confirm_bytes = make_confirm_excel(parsed, analysis)
-    zip_bytes = make_analysis_zip(parsed, analysis)
+    if st.session_state.get("export_files_signature") != analysis_signature:
+        st.session_state["export_confirm_bytes"] = make_confirm_excel(parsed, analysis)
+        st.session_state["export_zip_bytes"] = make_analysis_zip(parsed, analysis)
+        st.session_state["export_files_signature"] = analysis_signature
+    confirm_bytes = st.session_state["export_confirm_bytes"]
+    zip_bytes = st.session_state["export_zip_bytes"]
     d1.download_button(
         "확인용 엑셀 다운로드",
         confirm_bytes,
