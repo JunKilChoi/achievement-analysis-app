@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.118
+성취수준별 평가결과 분석 웹앱 v1.119
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -112,6 +112,7 @@
 - v1.116: 성취기준별 분석 표에서 환산평균 열을 제거하여 핵심 지표 중심으로 정리
 - v1.117: 성취수준별 문항 분석에 표 읽는 법과 성취수준별 차이 해석 도움말 툴팁 추가
 - v1.118: 모든 AI 프롬프트에 Streamlit 수식 표기 규칙을 공통 적용하고, AI 분석 결과의 LaTeX 구분자를 화면 표시용으로 자동 보정
+- v1.119: AI 분석 Word 보고서에서 LaTeX 수식을 이미지로 변환하여 문장 내·독립 수식이 정상 표시되도록 개선
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -148,7 +149,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.118"
+APP_VERSION = "v1.119"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2178,6 +2179,115 @@ def make_ai_report_docx(
     rr.font.name = "맑은 고딕"
     rr.font.color.rgb = RGBColor.from_string("111827")
 
+    def clean_math_expression(expression: str) -> str:
+        """matplotlib MathText가 처리하기 쉽도록 흔한 LaTeX 표현을 정리한다."""
+        cleaned = str(expression or "").strip()
+        cleaned = re.sub(r"\\begin\{(?:aligned|align\*?|equation\*?)\}", "", cleaned)
+        cleaned = re.sub(r"\\end\{(?:aligned|align\*?|equation\*?)\}", "", cleaned)
+        cleaned = cleaned.replace("&", "")
+        cleaned = cleaned.replace(r"\dfrac", r"\frac")
+        cleaned = cleaned.replace(r"\tfrac", r"\frac")
+        cleaned = cleaned.replace(r"\displaystyle", "")
+        return cleaned.strip()
+
+    def render_math_png(expression: str, display: bool = False) -> Optional[io.BytesIO]:
+        """LaTeX 수식을 투명 배경 PNG로 렌더링한다. 실패하면 None을 반환한다."""
+        try:
+            from matplotlib.font_manager import FontProperties
+            from matplotlib.mathtext import math_to_image
+
+            cleaned = clean_math_expression(expression)
+            if not cleaned:
+                return None
+            image = io.BytesIO()
+            math_to_image(
+                f"${cleaned}$",
+                image,
+                prop=FontProperties(size=15 if display else 11.5),
+                dpi=220,
+                format="png",
+                color="black",
+            )
+            image.seek(0)
+            return image
+        except Exception:
+            return None
+
+    def add_math_picture(run: Any, expression: str, display: bool = False) -> bool:
+        """수식 이미지를 Word run에 넣고, 성공 여부를 반환한다."""
+        image = render_math_png(expression, display=display)
+        if image is None:
+            return False
+        try:
+            from PIL import Image
+
+            with Image.open(image) as im:
+                width_px, height_px = im.size
+            image.seek(0)
+            target_height_pt = 25.0 if display else 13.5
+            ratio = (width_px / height_px) if height_px else 1.0
+            target_width_pt = target_height_pt * ratio
+            max_width_pt = 430.0 if display else 300.0
+            if target_width_pt > max_width_pt:
+                scale = max_width_pt / target_width_pt
+                target_width_pt = max_width_pt
+                target_height_pt *= scale
+            run.add_picture(image, width=Pt(target_width_pt), height=Pt(target_height_pt))
+            return True
+        except Exception:
+            return False
+
+    inline_math_pattern = re.compile(r"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)")
+
+    def add_inline_math_runs(
+        paragraph: Any,
+        text_value: str,
+        *,
+        bold: bool = False,
+        font_size: Optional[float] = None,
+    ) -> None:
+        """일반 텍스트와 문장 내 LaTeX 수식을 하나의 Word 문단에 순서대로 넣는다."""
+        normalized = re.sub(r"\\\((.*?)\\\)", lambda m: f"${m.group(1).strip()}$", str(text_value), flags=re.DOTALL)
+        cursor = 0
+        for match in inline_math_pattern.finditer(normalized):
+            if match.start() > cursor:
+                text_run = paragraph.add_run(normalized[cursor:match.start()])
+                text_run.bold = bold
+                text_run.font.name = "맑은 고딕"
+                if font_size is not None:
+                    text_run.font.size = Pt(font_size)
+            math_run = paragraph.add_run()
+            if not add_math_picture(math_run, match.group(1), display=False):
+                fallback = paragraph.add_run(match.group(0))
+                fallback.bold = bold
+                fallback.font.name = "맑은 고딕"
+                if font_size is not None:
+                    fallback.font.size = Pt(font_size)
+            cursor = match.end()
+        if cursor < len(normalized):
+            text_run = paragraph.add_run(normalized[cursor:])
+            text_run.bold = bold
+            text_run.font.name = "맑은 고딕"
+            if font_size is not None:
+                text_run.font.size = Pt(font_size)
+
+    def add_display_math(expression: str) -> None:
+        """독립 수식을 가운데 정렬된 이미지로 추가한다."""
+        cleaned = clean_math_expression(expression)
+        # aligned 환경의 여러 줄은 줄별 수식으로 나누어 Word에서 잘리지 않게 표시한다.
+        parts = [part.strip() for part in re.split(r"\\\\\s*", cleaned) if part.strip()]
+        if not parts:
+            parts = [cleaned]
+        for part in parts:
+            paragraph = doc.add_paragraph()
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            paragraph.paragraph_format.space_before = Pt(3)
+            paragraph.paragraph_format.space_after = Pt(3)
+            run = paragraph.add_run()
+            if not add_math_picture(run, part, display=True):
+                fallback = paragraph.add_run(f"$${part}$$")
+                fallback.font.name = "맑은 고딕"
+
     def add_formatted_line(line: str) -> None:
         raw = line.rstrip()
         if raw == "":
@@ -2186,29 +2296,37 @@ def make_ai_report_docx(
         text = raw.strip()
         if re.match(r"^#{1,3}\s+", text):
             level = min(len(text) - len(text.lstrip('#')), 3)
-            doc.add_heading(re.sub(r"^#{1,3}\s+", "", text), level=level)
+            heading_text = re.sub(r"^#{1,3}\s+", "", text)
+            p = doc.add_heading("", level=level)
+            add_inline_math_runs(p, heading_text, bold=True)
             return
         if re.match(r"^\d+\.\s+", text) and len(text) <= 90:
             p = doc.add_paragraph()
             p.paragraph_format.space_before = Pt(4)
             p.paragraph_format.space_after = Pt(2)
-            r = p.add_run(text)
-            r.bold = True
-            r.font.size = Pt(12)
-            r.font.name = "맑은 고딕"
+            add_inline_math_runs(p, text, bold=True, font_size=12)
             return
         if text.startswith(('-', '•', '*')):
-            p = doc.add_paragraph(text.lstrip('-•* ').strip(), style='List Bullet')
+            p = doc.add_paragraph(style='List Bullet')
             p.paragraph_format.space_after = Pt(1)
+            add_inline_math_runs(p, text.lstrip('-•* ').strip())
             return
         p = doc.add_paragraph()
         p.paragraph_format.line_spacing = 1.15
         p.paragraph_format.space_after = Pt(3)
-        r = p.add_run(text)
-        r.font.name = "맑은 고딕"
+        add_inline_math_runs(p, text)
 
-    for line in str(report_body).splitlines():
-        add_formatted_line(line)
+    normalized_report_body = normalize_ai_math_markdown(str(report_body))
+    # $$...$$는 여러 줄에 걸쳐 있을 수 있으므로 본문 전체에서 먼저 분리한다.
+    report_parts = re.split(r"(\$\$.*?\$\$)", normalized_report_body, flags=re.DOTALL)
+    for part in report_parts:
+        if not part:
+            continue
+        if part.startswith("$$") and part.endswith("$$"):
+            add_display_math(part[2:-2].strip())
+            continue
+        for line in part.splitlines():
+            add_formatted_line(line)
 
     bio = io.BytesIO()
     doc.save(bio)
