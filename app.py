@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.124
+성취수준별 평가결과 분석 웹앱 v1.125
 
 버전 기록
+- v1.125: 고급 AI 분석의 모든 프롬프트 모드에 전체·학급별·문항별·성취수준별·평가영역별·성취기준별·학생별 통계표를 동일하게 전달하고, 직접 작성 모드에서는 공통 데이터 뒤의 기본 분석 지시문 자리를 사용자 프롬프트로 교체하도록 개선
 - v1.124: AI 분석 Word 보고서의 수식 이미지를 고정 크기가 아니라 해당 문단 글자 크기에 맞춰 렌더링·삽입하도록 조정하여 줄 안의 수식 크기가 주변 글자와 자연스럽게 맞도록 개선
 - v1.122: AI 분석 Word 보고서에서 축약형 LaTeX 분수(예: \frac32)를 표준 분수 형식으로 정규화하고, 문장 안의 **굵게** Markdown도 Word 서식으로 변환하여 수식과 강조 표시가 정상 출력되도록 개선
 - v1.123: Word 수식 정규화 과정의 LaTeX begin/end 환경 제거 정규식에서 백슬래시 이스케이프 오류를 수정하여 고급 분석 Word 보고서 생성이 중단되는 문제 해결
@@ -156,7 +157,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.124"
+APP_VERSION = "v1.125"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1439,7 +1440,7 @@ def extract_prompt_instruction_preview(base_prompt: str) -> str:
 
 
 def build_direct_custom_ai_prompt(base_prompt: str, custom_prompt: str, analysis_label: str) -> str:
-    """기본 분석 목차는 빼고 사용자가 직접 작성한 지시문과 앱 데이터만 결합한다."""
+    """공통 데이터는 그대로 유지하고 기본 분석 지시문 자리에 사용자 지시문을 넣는다."""
     data_context = extract_prompt_data_context(base_prompt)
     custom_prompt = str(custom_prompt or "").strip()
     return f"""
@@ -1448,17 +1449,17 @@ def build_direct_custom_ai_prompt(base_prompt: str, custom_prompt: str, analysis
 [분석 유형]
 {analysis_label}
 
-[사용자 직접 작성 프롬프트]
-{custom_prompt}
-
-[분석에 사용할 앱 데이터]
+[분석에 사용할 앱 전체 데이터]
 {data_context}
 
+[사용자 직접 작성 분석 지시문]
+{custom_prompt}
+
 작성 원칙:
-- 위의 사용자 직접 작성 프롬프트를 최우선으로 따르라.
-- 웹앱의 기본 분석 목차나 기본 분석 요구사항을 따르지 말고, 사용자가 요청한 범위와 형식에 맞춰 작성하라.
-- 단, 분석 근거는 위에 제공된 앱 데이터와 원안지 PDF가 있는 경우 해당 PDF에 한정하라.
-- 문항번호, 정답률, 변별도, 평가영역, 성취기준 등 제공된 수치를 근거로 활용하라.
+- 위에 제공된 앱 전체 데이터와 원안지 PDF는 그대로 분석 근거로 사용하라.
+- 분석의 범위, 강조점, 순서와 출력 형식은 사용자 직접 작성 분석 지시문을 최우선으로 따르라.
+- 웹앱의 기본 분석 목차는 적용하지 말고 사용자가 요청한 항목만 취사 선택하여 분석하라.
+- 다만 사용자 요청과 관련된 수치를 누락하지 말고 문항번호, 정답률, 변별도, 학급별 평균·표준편차, 평가영역, 성취기준 등 제공된 실제 데이터를 근거로 활용하라.
 - 학생 이름은 직접 쓰지 말고 필요한 경우 '해당 학생' 또는 '학생'으로 표현하라.
 """.strip()
 
@@ -1697,21 +1698,71 @@ def build_advanced_exam_ai_prompt(
     student_key: Optional[str] = None,
     anonymize_student: bool = True,
 ) -> str:
-    """고급 분석: 업로드한 원안지 PDF와 통계 결과를 연결해 심층 해석을 생성한다."""
+    """고급 분석: 원안지 PDF와 앱이 계산한 전체 통계 자료를 함께 전달한다."""
     item_numbers = item_numbers or []
-    item = analysis["item"].copy().sort_values("정답률")
-    domain = analysis["domain"].copy().sort_values("정답률")
+
+    def prompt_df(df: pd.DataFrame, *, percent: bool = True, empty_text: str = "데이터 없음") -> str:
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return empty_text
+        output = ai_percent_df(df) if percent else df.copy()
+        return output.to_string(index=False)
+
+    item = analysis.get("item", pd.DataFrame()).copy()
+    if not item.empty and "문항번호" in item.columns:
+        item = item.sort_values("문항번호")
+
+    class_achievement = analysis.get("class_achievement", pd.DataFrame()).copy()
+    if not class_achievement.empty and "반" in class_achievement.columns:
+        class_achievement = class_achievement.sort_values("반")
+
+    class_item = analysis.get("class_item", pd.DataFrame()).copy()
+    if not class_item.empty and {"반", "문항번호"}.issubset(class_item.columns):
+        class_item = class_item.sort_values(["문항번호", "반"])
+
+    class_item_pivot = analysis.get("class_item_pivot", pd.DataFrame()).copy()
+    if not class_item_pivot.empty and "문항번호" in class_item_pivot.columns:
+        class_item_pivot = class_item_pivot.sort_values("문항번호")
+
+    domain = analysis.get("domain", pd.DataFrame()).copy()
+    if not domain.empty and "평가영역" in domain.columns:
+        domain = domain.sort_values("평가영역")
+
     standard = analysis.get("standard", pd.DataFrame()).copy()
-    if not standard.empty and "정답률" in standard.columns:
-        standard = standard.sort_values("정답률")
+    if not standard.empty and "성취기준" in standard.columns:
+        standard = standard.sort_values("성취기준")
+
+    level_item = analysis.get("level_item", pd.DataFrame()).copy()
+    if not level_item.empty and "문항번호" in level_item.columns:
+        level_item = level_item.sort_values("문항번호")
+
     difficulty_gap = analysis.get("difficulty_gap", pd.DataFrame()).copy()
-    if not difficulty_gap.empty:
-        difficulty_gap = difficulty_gap[difficulty_gap["괴리여부"].isin(["불일치", "차이 있음"])].copy()
-        difficulty_gap = difficulty_gap.sort_values(["정답률", "문항번호"], ascending=[True, True])
+    if not difficulty_gap.empty and "문항번호" in difficulty_gap.columns:
+        difficulty_gap = difficulty_gap.sort_values("문항번호")
+
+    individual = analysis.get("individual", pd.DataFrame()).copy()
+    if not individual.empty:
+        individual = individual.drop(columns=["이름"], errors="ignore")
+        sort_cols = [c for c in ["반", "번호"] if c in individual.columns]
+        if sort_cols:
+            individual = individual.sort_values(sort_cols)
+
+    domain_scores = analysis.get("domain_scores", pd.DataFrame()).copy()
+    if not domain_scores.empty:
+        domain_scores = domain_scores.drop(columns=["이름"], errors="ignore")
+        sort_cols = [c for c in ["반", "번호", "평가영역"] if c in domain_scores.columns]
+        if sort_cols:
+            domain_scores = domain_scores.sort_values(sort_cols)
+
+    standard_scores = analysis.get("standard_scores", pd.DataFrame()).copy()
+    if not standard_scores.empty:
+        standard_scores = standard_scores.drop(columns=["이름"], errors="ignore")
+        sort_cols = [c for c in ["반", "번호", "성취기준"] if c in standard_scores.columns]
+        if sort_cols:
+            standard_scores = standard_scores.sort_values(sort_cols)
 
     selected_item = pd.DataFrame()
-    if item_numbers:
-        selected_item = analysis["item"].copy()
+    if item_numbers and not item.empty:
+        selected_item = item.copy()
         selected_item["문항번호"] = pd.to_numeric(selected_item["문항번호"], errors="coerce").astype("Int64")
         selected_item = selected_item[selected_item["문항번호"].isin(item_numbers)].sort_values("문항번호")
 
@@ -1720,7 +1771,7 @@ def build_advanced_exam_ai_prompt(
     if student_key:
         students = analysis.get("students", pd.DataFrame()).copy()
         long_df = analysis.get("long", pd.DataFrame()).copy()
-        one = students[students["반/번호"] == student_key]
+        one = students[students["반/번호"] == student_key] if not students.empty and "반/번호" in students.columns else pd.DataFrame()
         if not one.empty:
             srow = one.iloc[0]
             student_label = f"{srow['반/번호']} 학생" if anonymize_student else f"{srow['반/번호']} {srow['이름']} 학생"
@@ -1743,43 +1794,65 @@ def build_advanced_exam_ai_prompt(
 
     scope_instruction = _advanced_scope_instruction(scope, item_numbers, student_label)
     exam = parsed.exam_info
-    selected_item_text = ai_percent_df(selected_item).to_string(index=False) if not selected_item.empty else "지정 문항 상세 통계 없음"
+    alpha = analysis.get("alpha")
 
     return f"""
 너는 중학교 과학 평가 문항을 분석하는 교육평가 전문가이다.
 
-아래에는 원안지 PDF 파일과 평가 통계 결과가 함께 제공된다.
-원안지의 문항 내용, 선택지 구성, 자료 제시 방식, 성취기준, 정답률, 선택지 반응률, 변별도, 성취수준별 정답률을 종합하여 시험 결과를 심층 분석하라.
+아래에는 원안지 PDF 파일과 앱이 계산한 전체 평가 통계 자료가 함께 제공된다.
+모든 통계 자료를 빠짐없이 참고할 수 있도록 전달하지만, 분석 결과에서는 선택한 분석 유형과 사용자 지시문에 필요한 자료만 취사 선택하여 활용하라.
+관련성이 낮은 표를 억지로 모두 나열하지 말고, 사용한 수치와 표의 의미를 원안지 내용과 연결하여 해석하라.
 
 {scope_instruction}
 
 [원안지 파일]
 - 파일명: {pdf_name}
-- 이 PDF 전체를 확인하고, 아래 통계 자료와 연결하라.
+- 이 PDF 전체를 확인하고 아래 모든 통계 자료와 연결하라.
 
 [평가 정보]
 {exam}
 
-[성취도 요약]
-{ai_percent_df(analysis['achievement']).to_string(index=False)}
+[전체 성취도 요약]
+{prompt_df(analysis.get('achievement', pd.DataFrame()))}
+
+[검사신뢰도]
+크론바흐 알파: {None if alpha is None else round(float(alpha), 3)}
+
+[학급별 성취도]
+{prompt_df(class_achievement)}
 
 [사용자 지정 문항 상세 통계]
-{selected_item_text}
+{prompt_df(selected_item, empty_text='지정 문항 상세 통계 없음')}
 
-[정답률 낮은 문항]
-{ai_percent_df(item[['문항번호','평가영역','난이도','배점','정답','정답률','변별도']].head(12)).to_string(index=False)}
+[전체 문항별 분석 · 선택지 반응 포함]
+{prompt_df(item)}
 
-[선택지 반응 포함 문항별 분석]
-{ai_percent_df(item.head(20)).to_string(index=False)}
+[학급별 문항 상세 통계]
+{prompt_df(class_item)}
+
+[문항별 학급 정답률 비교]
+{prompt_df(class_item_pivot)}
+
+[성취수준별 문항 정답률]
+{prompt_df(level_item)}
 
 [평가영역별 분석]
-{ai_percent_df(domain).to_string(index=False)}
+{prompt_df(domain)}
 
 [성취기준별 분석]
-{ai_percent_df(standard).to_string(index=False) if not standard.empty else '성취기준별 분석 데이터 없음'}
+{prompt_df(standard, empty_text='성취기준별 분석 데이터 없음')}
 
-[예상 난이도와 실제 정답률 판정]
-{difficulty_gap[['문항번호','평가영역','예상난이도','기대정답률구간','정답률_pct','차이해석']].head(15).to_string(index=False) if not difficulty_gap.empty else '불일치 문항 없음'}
+[예상 난이도와 실제 정답률 전체 판정]
+{prompt_df(difficulty_gap, empty_text='난이도 비교 데이터 없음')}
+
+[학생별 점수·성취수준 요약 · 이름 제외]
+{prompt_df(individual)}
+
+[학생별 평가영역 결과 · 이름 제외]
+{prompt_df(domain_scores)}
+
+[학생별 성취기준 결과 · 이름 제외]
+{prompt_df(standard_scores)}
 
 {student_block if scope == '원안지 기반 학생 개별 분석' else ''}
 
@@ -1793,8 +1866,9 @@ def build_advanced_exam_ai_prompt(
 - 지정 문항이 있으면 지정 문항을 우선적으로 다루라.
 
 3. 통계 결과와 문항 내용의 연결
-- 정답률, 변별도, 선택지 반응률, 예상 난이도와 실제 결과를 문항 내용과 연결해 해석하라.
-- 특정 오답 선택지에 응답이 몰린 경우, 해당 선택지가 학생들에게 매력적으로 작용했을 가능성을 설명하라.
+- 전체·학급별·성취수준별 정답률, 변별도, 선택지 반응률, 예상 난이도와 실제 결과를 문항 내용과 연결해 해석하라.
+- 특정 오답 선택지에 응답이 몰린 경우 해당 선택지가 학생들에게 매력적으로 작용했을 가능성을 설명하라.
+- 반별 분석을 요청받은 경우 학급별 평균, 표준편차, 최고점, 최저점, 성취수준 분포와 학급별 문항 정답률을 함께 활용하라.
 
 4. 평가영역·성취기준과의 연결
 - 문항 내용이 문항정보표의 평가영역 및 성취기준과 잘 연결되는지 검토하라.
@@ -1811,7 +1885,8 @@ def build_advanced_exam_ai_prompt(
 
 작성 원칙:
 - 원안지 내용과 통계 결과를 반드시 연결하라.
-- 문항번호를 명시하며 구체적으로 분석하라.
+- 문항번호와 실제 수치를 명시하며 구체적으로 분석하라.
+- 제공된 모든 표를 기계적으로 요약하지 말고 선택한 분석 목적에 필요한 자료를 취사 선택하라.
 - 단순 요약이 아니라 교사가 수업 개선과 평가 개선에 활용할 수 있는 분석을 작성하라.
 """.strip()
 
