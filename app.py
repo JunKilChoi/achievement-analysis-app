@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.117
+성취수준별 평가결과 분석 웹앱 v1.118
 
 버전 기록
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -111,6 +111,7 @@
 - v1.115: 성취기준별 분석에 성취기준 내 평가요소 해석 중심 도움말 툴팁 추가
 - v1.116: 성취기준별 분석 표에서 환산평균 열을 제거하여 핵심 지표 중심으로 정리
 - v1.117: 성취수준별 문항 분석에 표 읽는 법과 성취수준별 차이 해석 도움말 툴팁 추가
+- v1.118: 모든 AI 프롬프트에 Streamlit 수식 표기 규칙을 공통 적용하고, AI 분석 결과의 LaTeX 구분자를 화면 표시용으로 자동 보정
 - v1.94: 데이터 확인의 학생 정오표에서 학번이 정수형 식별값으로 표시되도록 보정
 - v1.83: 성취수준별 문항 분석 표에서 평가영역을 앞쪽에 배치하고 수준간격차 열을 강조 표시
 - v1.65: 문항별 분석 탭에 정답률 정렬, 열 제목 클릭 정렬, 변별도 계산식과 해석 기준 안내 문구 추가
@@ -147,7 +148,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.117"
+APP_VERSION = "v1.118"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1454,6 +1455,46 @@ def build_direct_custom_ai_prompt(base_prompt: str, custom_prompt: str, analysis
 """.strip()
 
 
+MATH_FORMAT_RULE = r"""
+[수식 표기 규칙]
+- 문장 안의 수식은 `$...$` 형식으로 작성한다.
+- 한 줄을 차지하는 독립 수식은 `$$...$$` 형식으로 작성한다.
+- `\(...\)`와 `\[...\]` 형식은 사용하지 않는다.
+- LaTeX 수식을 일반 코드 블록으로 감싸지 않는다.
+""".strip()
+
+
+def append_math_format_rule(prompt: str) -> str:
+    """프롬프트 사용 방식과 관계없이 화면용 수식 표기 규칙을 마지막에 공통으로 붙인다."""
+    prompt_text = str(prompt or "").rstrip()
+    if "[수식 표기 규칙]" in prompt_text:
+        return prompt_text
+    return f"{prompt_text}\n\n{MATH_FORMAT_RULE}".strip()
+
+
+def normalize_ai_math_markdown(text: str) -> str:
+    """AI가 출력한 LaTeX 구분자를 Streamlit Markdown 수식 형식으로 변환한다."""
+    if not text:
+        return ""
+
+    normalized = str(text)
+    # 독립 수식: \[ ... \] -> $$ ... $$
+    normalized = re.sub(
+        r"\\\[(.*?)\\\]",
+        lambda m: f"\n\n$$\n{m.group(1).strip()}\n$$\n\n",
+        normalized,
+        flags=re.DOTALL,
+    )
+    # 문장 안 수식: \( ... \) -> $ ... $
+    normalized = re.sub(
+        r"\\\((.*?)\\\)",
+        lambda m: f"${m.group(1).strip()}$",
+        normalized,
+        flags=re.DOTALL,
+    )
+    return normalized
+
+
 def compose_ai_prompt_by_mode(
     base_prompt: str,
     prompt_mode: str,
@@ -1461,12 +1502,14 @@ def compose_ai_prompt_by_mode(
     custom_prompt: str = "",
     analysis_label: str = "AI 분석",
 ) -> str:
-    """선택한 프롬프트 사용 방식에 따라 실제 AI 전달 프롬프트를 구성한다."""
+    """선택한 프롬프트 사용 방식으로 본문을 구성한 뒤 공통 수식 표기 규칙을 적용한다."""
     if prompt_mode == PROMPT_MODE_WITH_FOCUS:
-        return append_focus_request_to_prompt(base_prompt, focus_request)
-    if prompt_mode == PROMPT_MODE_DIRECT:
-        return build_direct_custom_ai_prompt(base_prompt, custom_prompt, analysis_label)
-    return base_prompt
+        final_prompt = append_focus_request_to_prompt(base_prompt, focus_request)
+    elif prompt_mode == PROMPT_MODE_DIRECT:
+        final_prompt = build_direct_custom_ai_prompt(base_prompt, custom_prompt, analysis_label)
+    else:
+        final_prompt = base_prompt
+    return append_math_format_rule(final_prompt)
 
 
 BASIC_OVERALL_FOCUS_PRESETS: Dict[str, str] = {
@@ -1817,12 +1860,12 @@ def call_openai_stream(api_key: str, model: str, prompt: str, placeholder) -> st
             if event_type == "response.output_text.delta":
                 delta = getattr(event, "delta", "") or ""
                 full_text += delta
-                placeholder.markdown(full_text + "▌")
+                placeholder.markdown(normalize_ai_math_markdown(full_text) + "▌")
 
         final_response = stream.get_final_response()
 
     final_text = (getattr(final_response, "output_text", "") or full_text).strip()
-    placeholder.markdown(final_text)
+    placeholder.markdown(normalize_ai_math_markdown(final_text))
     return final_text
 
 
@@ -1864,12 +1907,12 @@ def call_openai_stream_with_pdf(api_key: str, model: str, prompt: str, pdf_bytes
             if event_type == "response.output_text.delta":
                 delta = getattr(event, "delta", "") or ""
                 full_text += delta
-                placeholder.markdown(full_text + "▌")
+                placeholder.markdown(normalize_ai_math_markdown(full_text) + "▌")
 
         final_response = stream.get_final_response()
 
     final_text = (getattr(final_response, "output_text", "") or full_text).strip()
-    placeholder.markdown(final_text)
+    placeholder.markdown(normalize_ai_math_markdown(final_text))
     return final_text
 
 
@@ -3977,7 +4020,7 @@ def main() -> None:
 
                 if st.session_state.get(result_state_key) and not basic_just_ran:
                     st.markdown("#### 저장된 기본 분석 결과")
-                    st.markdown(st.session_state[result_state_key])
+                    st.markdown(normalize_ai_math_markdown(st.session_state[result_state_key]))
                     st.download_button(
                         "기본 분석 결과 Word 다운로드",
                         st.session_state[docx_state_key],
@@ -4150,7 +4193,7 @@ def main() -> None:
 
                 if st.session_state.get(adv_result_state_key) and not advanced_just_ran:
                     st.markdown("#### 저장된 고급 분석 결과")
-                    st.markdown(st.session_state[adv_result_state_key])
+                    st.markdown(normalize_ai_math_markdown(st.session_state[adv_result_state_key]))
                     st.download_button(
                         "고급 분석 결과 Word 다운로드",
                         st.session_state[adv_docx_state_key],
