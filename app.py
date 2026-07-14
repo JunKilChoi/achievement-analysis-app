@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.123
+성취수준별 평가결과 분석 웹앱 v1.124
 
 버전 기록
+- v1.124: AI 분석 Word 보고서의 수식 이미지를 고정 크기가 아니라 해당 문단 글자 크기에 맞춰 렌더링·삽입하도록 조정하여 줄 안의 수식 크기가 주변 글자와 자연스럽게 맞도록 개선
 - v1.122: AI 분석 Word 보고서에서 축약형 LaTeX 분수(예: \frac32)를 표준 분수 형식으로 정규화하고, 문장 안의 **굵게** Markdown도 Word 서식으로 변환하여 수식과 강조 표시가 정상 출력되도록 개선
 - v1.123: Word 수식 정규화 과정의 LaTeX begin/end 환경 제거 정규식에서 백슬래시 이스케이프 오류를 수정하여 고급 분석 Word 보고서 생성이 중단되는 문제 해결
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
@@ -155,7 +156,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.123"
+APP_VERSION = "v1.124"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2231,32 +2232,46 @@ def make_ai_report_docx(
         cleaned = cleaned.replace("&", "")
         return cleaned.strip()
 
-    def render_math_png(expression: str, display: bool = False) -> Optional[io.BytesIO]:
+    NORMAL_BODY_FONT_PT = 10.5
+    MATH_IMAGE_DPI = 220
+
+    def render_math_png(expression: str, font_size_pt: float) -> Optional[io.BytesIO]:
         """LaTeX 수식을 투명 배경 PNG로 렌더링한다. 실패하면 None을 반환한다."""
         try:
             from matplotlib.font_manager import FontProperties
             from matplotlib.mathtext import math_to_image
+            from PIL import Image
 
             cleaned = clean_math_expression(expression)
             if not cleaned:
                 return None
-            image = io.BytesIO()
+            raw_image = io.BytesIO()
             math_to_image(
                 f"${cleaned}$",
-                image,
-                prop=FontProperties(size=15 if display else 11.5),
-                dpi=220,
+                raw_image,
+                prop=FontProperties(size=max(1.0, float(font_size_pt))),
+                dpi=MATH_IMAGE_DPI,
                 format="png",
                 color="black",
             )
-            image.seek(0)
-            return image
+            raw_image.seek(0)
+
+            with Image.open(raw_image) as im:
+                rgba = im.convert("RGBA")
+                alpha = rgba.getchannel("A")
+                bbox = alpha.getbbox()
+                if bbox:
+                    rgba = rgba.crop(bbox)
+                cleaned_image = io.BytesIO()
+                rgba.save(cleaned_image, format="PNG")
+            cleaned_image.seek(0)
+            return cleaned_image
         except Exception:
             return None
 
-    def add_math_picture(run: Any, expression: str, display: bool = False) -> bool:
+    def add_math_picture(run: Any, expression: str, font_size_pt: float, display: bool = False) -> bool:
         """수식 이미지를 Word run에 넣고, 성공 여부를 반환한다."""
-        image = render_math_png(expression, display=display)
+        image = render_math_png(expression, font_size_pt=font_size_pt)
         if image is None:
             return False
         try:
@@ -2265,13 +2280,12 @@ def make_ai_report_docx(
             with Image.open(image) as im:
                 width_px, height_px = im.size
             image.seek(0)
-            target_height_pt = 25.0 if display else 13.5
-            ratio = (width_px / height_px) if height_px else 1.0
-            target_width_pt = target_height_pt * ratio
+            target_width_pt = width_px * 72.0 / MATH_IMAGE_DPI
+            target_height_pt = height_px * 72.0 / MATH_IMAGE_DPI
             max_width_pt = 430.0 if display else 300.0
             if target_width_pt > max_width_pt:
                 scale = max_width_pt / target_width_pt
-                target_width_pt = max_width_pt
+                target_width_pt *= scale
                 target_height_pt *= scale
             run.add_picture(image, width=Pt(target_width_pt), height=Pt(target_height_pt))
             return True
@@ -2279,6 +2293,26 @@ def make_ai_report_docx(
             return False
 
     inline_math_pattern = re.compile(r"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)")
+
+    def resolve_paragraph_font_size_pt(paragraph: Any, explicit_font_size: Optional[float] = None) -> float:
+        """문단의 실제 글자 크기를 추정하여 수식 이미지 크기와 맞춘다."""
+        if explicit_font_size is not None:
+            return float(explicit_font_size)
+        try:
+            style = getattr(paragraph, "style", None)
+            checked = set()
+            while style is not None and id(style) not in checked:
+                checked.add(id(style))
+                size = getattr(getattr(style, "font", None), "size", None)
+                if size is not None:
+                    try:
+                        return float(size.pt)
+                    except Exception:
+                        pass
+                style = getattr(style, "base_style", None)
+        except Exception:
+            pass
+        return NORMAL_BODY_FONT_PT
 
     def add_text_runs_with_markdown(
         paragraph: Any,
@@ -2313,6 +2347,7 @@ def make_ai_report_docx(
         font_size: Optional[float] = None,
     ) -> None:
         """일반 텍스트, 굵게 Markdown, 문장 내 LaTeX 수식을 하나의 Word 문단에 순서대로 넣는다."""
+        effective_font_size = resolve_paragraph_font_size_pt(paragraph, font_size)
         normalized = normalize_ai_math_markdown(str(text_value))
         cursor = 0
         for match in inline_math_pattern.finditer(normalized):
@@ -2324,7 +2359,7 @@ def make_ai_report_docx(
                     font_size=font_size,
                 )
             math_run = paragraph.add_run()
-            if not add_math_picture(math_run, match.group(1), display=False):
+            if not add_math_picture(math_run, match.group(1), font_size_pt=effective_font_size, display=False):
                 add_text_runs_with_markdown(
                     paragraph,
                     match.group(0),
@@ -2341,7 +2376,7 @@ def make_ai_report_docx(
             )
 
 
-    def add_display_math(expression: str) -> None:
+    def add_display_math(expression: str, font_size: float = NORMAL_BODY_FONT_PT) -> None:
         """독립 수식을 가운데 정렬된 이미지로 추가한다."""
         cleaned = clean_math_expression(expression)
         # aligned 환경의 여러 줄은 줄별 수식으로 나누어 Word에서 잘리지 않게 표시한다.
@@ -2354,7 +2389,7 @@ def make_ai_report_docx(
             paragraph.paragraph_format.space_before = Pt(3)
             paragraph.paragraph_format.space_after = Pt(3)
             run = paragraph.add_run()
-            if not add_math_picture(run, part, display=True):
+            if not add_math_picture(run, part, font_size_pt=float(font_size), display=True):
                 fallback = paragraph.add_run(f"$${part}$$")
                 fallback.font.name = "맑은 고딕"
 
