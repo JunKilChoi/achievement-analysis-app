@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.122
+성취수준별 평가결과 분석 웹앱 v1.123
 
 버전 기록
 - v1.122: AI 분석 Word 보고서에서 축약형 LaTeX 분수(예: \frac32)를 표준 분수 형식으로 정규화하고, 문장 안의 **굵게** Markdown도 Word 서식으로 변환하여 수식과 강조 표시가 정상 출력되도록 개선
+- v1.123: Word 수식 정규화 과정의 LaTeX begin/end 환경 제거 정규식에서 백슬래시 이스케이프 오류를 수정하여 고급 분석 Word 보고서 생성이 중단되는 문제 해결
 - v1.1: 학생답 정오표 여러 파일 업로드/추가 업로드/중복 제외, 문항정보표 C6에서 선택형·서답형 만점 자동 추출
 - v1.2: 화면·AI 프롬프트·엑셀 출력의 정답률/비율/변별도/수준간격차를 % 기준으로 표시
 - v1.3: 표 화면/엑셀 출력에서 비율값은 52.3%처럼 데이터에 %를 포함하고, 헤더에 (명)/(점)/(%) 단위 표시
@@ -154,7 +155,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.122"
+APP_VERSION = "v1.123"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -2225,8 +2226,8 @@ def make_ai_report_docx(
     def clean_math_expression(expression: str) -> str:
         """matplotlib MathText가 처리하기 쉽도록 흔한 LaTeX 표현을 정리한다."""
         cleaned = normalize_common_latex_syntax(str(expression or "").strip())
-        cleaned = re.sub(r"\begin\{(?:aligned|align\*?|equation\*?)\}", "", cleaned)
-        cleaned = re.sub(r"\end\{(?:aligned|align\*?|equation\*?)\}", "", cleaned)
+        cleaned = re.sub(r"\\begin\{(?:aligned|align\*?|equation\*?)\}", "", cleaned)
+        cleaned = re.sub(r"\\end\{(?:aligned|align\*?|equation\*?)\}", "", cleaned)
         cleaned = cleaned.replace("&", "")
         return cleaned.strip()
 
