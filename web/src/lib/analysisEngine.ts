@@ -23,7 +23,7 @@ export interface AnalysisOutput {
   examInfo: ExamInfo;
   tables: AnalysisTables;
   confirmWorkbook: Uint8Array;
-  analysisZip: Uint8Array;
+  analysisWorkbook: Uint8Array;
   elapsedSeconds: number;
 }
 
@@ -133,7 +133,7 @@ declare global {
 
 const INITIAL_STATUS: EngineStatus = {
   state: "loading",
-  message: "브라우저 분석 엔진을 준비하고 있습니다.",
+  message: "분석 기능을 준비하고 있습니다.",
 };
 
 class AnalysisEngine {
@@ -345,7 +345,7 @@ Path("/tmp/ai-report.docx").write_bytes(
     } finally {
       this.setStatus({
         state: "ready",
-        message: "준비가 끝났습니다. 평가 파일을 선택하세요.",
+        message: "평가 파일을 선택해 주세요.",
       });
     }
   }
@@ -536,8 +536,8 @@ analysis = APP_NAMESPACE["analyze_all"](parsed, total_full, cuts)
 Path("/tmp/confirm.xlsx").write_bytes(
     APP_NAMESPACE["make_confirm_excel"](parsed, analysis)
 )
-Path("/tmp/analysis.zip").write_bytes(
-    APP_NAMESPACE["make_analysis_zip"](parsed, analysis)
+Path("/tmp/analysis.xlsx").write_bytes(
+    APP_NAMESPACE["make_analysis_excel"](parsed, analysis)
 )
 
 warning_count = (
@@ -603,7 +603,7 @@ json.dumps({
       summary: parsedResult.summary,
       tables: parsedResult.tables,
       confirmWorkbook: this.runtime.FS.readFile("/tmp/confirm.xlsx"),
-      analysisZip: this.runtime.FS.readFile("/tmp/analysis.zip"),
+      analysisWorkbook: this.runtime.FS.readFile("/tmp/analysis.xlsx"),
       elapsedSeconds: (performance.now() - startedAt) / 1000,
     };
   }
@@ -637,7 +637,7 @@ json.dumps({
       this.runtime = await window.loadPyodide({ indexURL: PYODIDE_INDEX });
       this.setStatus({
         state: "loading",
-        message: "Excel 처리 도구를 처음 한 번만 내려받고 있습니다.",
+        message: "분석 기능을 준비하고 있습니다.",
       });
       await this.runtime.loadPackage(["micropip", "numpy", "pandas"]);
       await this.runtime.runPythonAsync(`
@@ -662,7 +662,7 @@ APP_NAMESPACE = app_module.__dict__
 `);
       this.setStatus({
         state: "ready",
-        message: "준비가 끝났습니다. 평가 파일을 선택하세요.",
+        message: "평가 파일을 선택해 주세요.",
       });
     } catch (error) {
       this.setStatus({

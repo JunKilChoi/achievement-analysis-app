@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.133
+성취수준별 평가결과 분석 웹앱 v2.0
 
 버전 기록
+- v2.0: Streamlit 프로토타입의 전체 기능을 독립 웹앱으로 이식하고 UI·문항 진단·AI 분석·Word 보고서·6종 통합 Excel을 정식 배포 수준으로 개선
+- v1.134: 잘못 표기된 5종 분석을 실제 6종으로 바로잡고 ZIP 대신 안내 시트와 13개 세부 시트를 갖춘 단일 통합 Excel로 제공하며 표 서식을 개선
 - v1.133: 문항 진단의 A~E 성취수준별 정답률 그래프에 각 수준의 실제 응시 인원을 괄호로 함께 표시
 - v1.132: 문항 진단 기준 설정을 기본 펼침 상태의 최상단으로 이동하고 문항 상태 요약을 한 줄로 축소하며, 기본정보 아래에 6개 체크리스트를 세로 배치하고 각 기준별 근거 수치·그래프를 동일한 순서로 재구성
 - v1.131: 문항 진단을 6개 검토 체크리스트와 신호 개수 기반 판정으로 재구성하고 극단 정답률·학급 간 차이·최소 학급 인원 기준을 조정 가능하게 하며, 검사신뢰도 α는 판정에서 제외해 접이식 참고 정보로 이동
@@ -137,7 +139,7 @@
 - 나이스 문항정보표 + 학생답 정오표 업로드
 - 자동 파싱/검증/점수 계산
 - 웹앱 내 분석표 확인
-- 확인용 엑셀 및 5종 분석 엑셀 ZIP 다운로드
+- 확인용 엑셀 및 6종 종합 분석 엑셀 다운로드
 - OpenAI API 선택 연동: 기본 분석(통계 기반 해석) / 고급 분석(원안지 기반 심층 해석) 초안 생성
 """
 
@@ -149,7 +151,6 @@ import io
 import math
 import re
 import time
-import zipfile
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -165,7 +166,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.133"
+APP_VERSION = "v2.0"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1267,39 +1268,222 @@ def make_confirm_excel(parsed: ParsedData, analysis: Dict[str, Any]) -> bytes:
     return df_to_excel_bytes(sheets)
 
 
-def make_analysis_zip(parsed: ParsedData, analysis: Dict[str, Any]) -> bytes:
-    files = {
-        "성취도분석.xlsx": {
-            "전체": analysis["achievement"],
-            "학급별": analysis["class_achievement"],
-            "학생별": analysis["individual"],
-        },
-        "선다형분석_문항별.xlsx": {
-            "문항별분석": analysis["item"],
-            "난이도괴리분석": analysis.get("difficulty_gap", pd.DataFrame()),
-            "응답긴자료": analysis["long"],
-        },
-        "선다형분석_학급별.xlsx": {
-            "학급별문항": analysis["class_item"],
-            "문항별학급비교": analysis["class_item_pivot"],
-        },
-        "평가영역별분석.xlsx": {
-            "영역별분석": analysis["domain"],
-            "학생영역별": analysis["domain_scores"],
-        },
-        "성취기준별분석.xlsx": {
-            "성취기준별분석": analysis.get("standard", pd.DataFrame()),
-            "학생성취기준별": analysis.get("standard_scores", pd.DataFrame()),
-        },
-        "선다형분석_성취수준별.xlsx": {
-            "성취수준별문항": analysis["level_item"],
-        },
-    }
-    zip_buf = io.BytesIO()
-    with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for filename, sheets in files.items():
-            zf.writestr(filename, df_to_excel_bytes(sheets))
-    return zip_buf.getvalue()
+def make_analysis_excel(parsed: ParsedData, analysis: Dict[str, Any]) -> bytes:
+    """6종 분석 결과를 탐색하기 쉬운 하나의 Excel 통합 문서로 만든다."""
+    sections = [
+        (
+            "01", "성취도 분석", "#0F766E",
+            [
+                ("01_성취도_전체", "전체 성취도", "전체 학생의 점수와 성취수준 분포입니다.", analysis["achievement"]),
+                ("01_성취도_학급", "학급별 성취도", "학급별 점수와 성취수준을 비교합니다.", analysis["class_achievement"]),
+                ("01_성취도_학생", "학생별 성취도", "학생별 총점과 성취수준 자료입니다.", analysis["individual"]),
+            ],
+        ),
+        (
+            "02", "문항별 분석", "#2563EB",
+            [
+                ("02_문항별", "문항별 분석", "문항별 정답률, 평균점수, 난이도와 변별 정보를 확인합니다.", analysis["item"]),
+                ("02_난이도괴리", "예상 난이도와 실제 정답률", "예상 난이도와 실제 정답률이 어긋난 문항을 확인합니다.", analysis.get("difficulty_gap", pd.DataFrame())),
+                ("02_응답자료", "문항 응답 긴 자료", "학생과 문항 단위로 펼친 상세 응답 자료입니다.", analysis["long"]),
+            ],
+        ),
+        (
+            "03", "학급별 분석", "#7C3AED",
+            [
+                ("03_학급별문항", "학급별 문항 분석", "각 학급의 문항별 반응과 정답률을 확인합니다.", analysis["class_item"]),
+                ("03_문항학급비교", "문항별 학급 비교", "같은 문항의 학급별 결과를 가로로 비교합니다.", analysis["class_item_pivot"]),
+            ],
+        ),
+        (
+            "04", "평가영역별 분석", "#D97706",
+            [
+                ("04_평가영역", "평가영역별 분석", "평가영역별 배점, 평균과 성취 결과를 확인합니다.", analysis["domain"]),
+                ("04_학생영역", "학생별 평가영역", "학생별 평가영역 점수와 성취 결과입니다.", analysis["domain_scores"]),
+            ],
+        ),
+        (
+            "05", "성취기준별 분석", "#059669",
+            [
+                ("05_성취기준", "성취기준별 분석", "성취기준별 배점, 평균과 성취 결과를 확인합니다.", analysis.get("standard", pd.DataFrame())),
+                ("05_학생성취기준", "학생별 성취기준", "학생별 성취기준 점수와 성취 결과입니다.", analysis.get("standard_scores", pd.DataFrame())),
+            ],
+        ),
+        (
+            "06", "성취수준별 분석", "#DC4C64",
+            [
+                ("06_성취수준별문항", "성취수준별 문항 분석", "A~E 성취수준별 문항 정답률과 반응 차이를 확인합니다.", analysis["level_item"]),
+            ],
+        ),
+    ]
+
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        workbook = writer.book
+        guide = workbook.add_worksheet("분석 안내")
+        writer.sheets["분석 안내"] = guide
+        guide.hide_gridlines(2)
+        guide.set_zoom(95)
+        guide.set_tab_color("#183B35")
+        guide.set_column("A:A", 10)
+        guide.set_column("B:B", 22)
+        guide.set_column("C:F", 18)
+        title_fmt = workbook.add_format({
+            "bold": True, "font_size": 20, "font_color": "#FFFFFF",
+            "bg_color": "#183B35", "align": "left", "valign": "vcenter",
+        })
+        subtitle_fmt = workbook.add_format({
+            "font_size": 11, "font_color": "#D9EEE8", "bg_color": "#183B35",
+            "align": "left", "valign": "vcenter",
+        })
+        label_fmt = workbook.add_format({
+            "bold": True, "font_color": "#47635C", "bg_color": "#EAF2EF",
+            "align": "center", "valign": "vcenter", "border": 1, "border_color": "#D4E1DC",
+        })
+        value_fmt = workbook.add_format({
+            "font_color": "#1F2937", "bg_color": "#FFFFFF",
+            "align": "center", "valign": "vcenter", "border": 1, "border_color": "#D4E1DC",
+        })
+        section_fmt = workbook.add_format({
+            "bold": True, "font_size": 12, "font_color": "#FFFFFF",
+            "bg_color": "#0F766E", "align": "left", "valign": "vcenter",
+        })
+        table_header_fmt = workbook.add_format({
+            "bold": True, "font_color": "#FFFFFF", "bg_color": "#315E55",
+            "align": "center", "valign": "vcenter", "border": 1, "border_color": "#D4E1DC",
+        })
+        category_fmt = workbook.add_format({
+            "bold": True, "font_color": "#0F5B52", "bg_color": "#F3F8F6",
+            "align": "center", "valign": "vcenter", "border": 1, "border_color": "#D4E1DC",
+        })
+        link_fmt = workbook.add_format({
+            "bold": True, "font_color": "#0F5B52", "underline": True,
+            "bg_color": "#F3F8F6", "align": "left", "valign": "vcenter",
+            "border": 1, "border_color": "#D4E1DC",
+        })
+        detail_fmt = workbook.add_format({
+            "font_color": "#374151", "bg_color": "#FFFFFF", "align": "left",
+            "valign": "vcenter", "border": 1, "border_color": "#D4E1DC",
+        })
+        note_fmt = workbook.add_format({
+            "font_color": "#4B635D", "bg_color": "#F5F8F7", "text_wrap": True,
+            "align": "left", "valign": "vcenter", "border": 1, "border_color": "#D4E1DC",
+        })
+
+        guide.merge_range("A1:F2", "성취수준별 평가결과 종합 분석", title_fmt)
+        guide.merge_range("A3:F3", "6개 분석 영역과 세부 자료를 하나의 Excel 파일에서 확인할 수 있습니다.", subtitle_fmt)
+        guide.set_row(0, 30)
+        guide.set_row(1, 18)
+        guide.write("A5", "교과목", label_fmt)
+        guide.write("B5", str(parsed.exam_info.get("교과목", "") or "-"), value_fmt)
+        guide.write("C5", "학년/학기", label_fmt)
+        grade_term = f"{parsed.exam_info.get('학년', '-')}/{parsed.exam_info.get('학기', '-')}"
+        guide.write("D5", grade_term, value_fmt)
+        guide.write("E5", "학생 수", label_fmt)
+        guide.write("F5", int(len(parsed.students_df)), value_fmt)
+        guide.merge_range("A7:F7", "6종 분석 구성", section_fmt)
+        guide.write("A8", "구분", table_header_fmt)
+        guide.write("B8", "분석 영역", table_header_fmt)
+        guide.merge_range("C8:F8", "포함된 세부 시트", table_header_fmt)
+
+        for row_idx, (number, category, _color, sheets) in enumerate(sections, start=8):
+            guide.write(row_idx, 0, number, category_fmt)
+            first_sheet = safe_sheet_name(sheets[0][0])
+            guide.write_url(row_idx, 1, f"internal:'{first_sheet}'!A1", link_fmt, category)
+            guide.merge_range(row_idx, 2, row_idx, 5, " · ".join(sheet[1] for sheet in sheets), detail_fmt)
+            guide.set_row(row_idx, 25)
+
+        guide.merge_range(
+            "A16:F17",
+            "사용 방법  |  위 분석 영역을 누르면 해당 결과 시트로 이동합니다. 각 세부 시트는 제목 행 고정, 필터, 교차 행 음영과 비율 색상 표시를 적용했습니다.",
+            note_fmt,
+        )
+        guide.set_row(15, 24)
+        guide.set_row(16, 24)
+        guide.freeze_panes(8, 0)
+
+        title_formats: Dict[str, Any] = {}
+        subtitle_formats: Dict[str, Any] = {}
+        back_link_fmt = workbook.add_format({"font_color": "#0F766E", "underline": True, "font_size": 10})
+        percent_fmt = workbook.add_format({"num_format": "0.0%", "align": "right"})
+        score_fmt = workbook.add_format({"num_format": "0.0", "align": "right"})
+        integer_fmt = workbook.add_format({"num_format": "#,##0", "align": "right"})
+        wrap_fmt = workbook.add_format({"text_wrap": True, "valign": "top"})
+
+        for _number, _category, color, sheets in sections:
+            if color not in title_formats:
+                title_formats[color] = workbook.add_format({
+                    "bold": True, "font_size": 17, "font_color": "#FFFFFF",
+                    "bg_color": color, "align": "left", "valign": "vcenter",
+                })
+                subtitle_formats[color] = workbook.add_format({
+                    "font_size": 10, "font_color": "#FFFFFF", "bg_color": color,
+                    "align": "left", "valign": "vcenter",
+                })
+            for sheet_name, title, description, frame in sheets:
+                safe_name = safe_sheet_name(sheet_name)
+                out_df = add_unit_headers(frame.copy())
+                out_df.to_excel(writer, index=False, sheet_name=safe_name, startrow=4)
+                worksheet = writer.sheets[safe_name]
+                worksheet.hide_gridlines(2)
+                worksheet.set_zoom(90)
+                worksheet.set_tab_color(color)
+                worksheet.set_default_row(20)
+                worksheet.freeze_panes(5, 0)
+                worksheet.set_landscape()
+                worksheet.fit_to_pages(1, 0)
+                last_col = max(len(out_df.columns) - 1, 5)
+                worksheet.merge_range(0, 0, 0, last_col, title, title_formats[color])
+                worksheet.merge_range(1, 0, 1, last_col, description, subtitle_formats[color])
+                worksheet.write_url(2, 0, "internal:'분석 안내'!A1", back_link_fmt, "← 분석 안내로 이동")
+                worksheet.set_row(0, 28)
+                worksheet.set_row(1, 22)
+                worksheet.set_row(4, 28)
+
+                if len(out_df.columns) == 0:
+                    worksheet.write(4, 0, "표시할 데이터가 없습니다.", note_fmt)
+                    continue
+
+                if len(out_df) > 0:
+                    worksheet.add_table(
+                        4, 0, 4 + len(out_df), len(out_df.columns) - 1,
+                        {
+                            "style": "Table Style Medium 2",
+                            "columns": [{"header": str(column)} for column in out_df.columns],
+                        },
+                    )
+                else:
+                    for col_idx, column in enumerate(out_df.columns):
+                        worksheet.write(4, col_idx, str(column), table_header_fmt)
+                    worksheet.write(5, 0, "표시할 데이터가 없습니다.", note_fmt)
+
+                for col_idx, (original_col, display_col) in enumerate(zip(frame.columns, out_df.columns)):
+                    values = [str(display_col)] + [str(value) for value in out_df[display_col].head(300).fillna("")]
+                    text_width = max(sum(2 if ord(char) > 255 else 1 for char in value) for value in values) + 2
+                    original_name = str(original_col)
+                    is_long_text = any(key in original_name for key in ["평가영역", "평가요소", "성취기준", "오답문항"])
+                    width = 42 if is_long_text else min(max(text_width, 11), 28)
+                    cell_format = None
+                    if is_percent_column(original_col, frame[original_col]):
+                        cell_format = percent_fmt
+                    elif is_score_display_column(original_col, frame[original_col]):
+                        cell_format = score_fmt
+                    elif unit_for_column(original_col, frame[original_col]) in {"명", "개"}:
+                        cell_format = integer_fmt
+                    elif is_long_text:
+                        cell_format = wrap_fmt
+                    worksheet.set_column(col_idx, col_idx, width, cell_format)
+                    if is_percent_column(original_col, frame[original_col]) and len(out_df) > 0:
+                        worksheet.conditional_format(
+                            5, col_idx, 4 + len(out_df), col_idx,
+                            {
+                                "type": "3_color_scale",
+                                "min_color": "#FDE2E2",
+                                "mid_color": "#FFF4CC",
+                                "max_color": "#D8EFE6",
+                            },
+                        )
+
+    return output.getvalue()
 
 
 # -----------------------------------------------------------------------------
@@ -2735,7 +2919,7 @@ def unit_for_column(col: Any, series: Optional[pd.Series] = None) -> str:
     name = str(col)
     if is_percent_column(col, series):
         return "%"
-    if name in ["응시자수", "정답자수"] or name.endswith("인원"):
+    if name in ["학생수", "응시자수", "정답자수"] or name.endswith("인원"):
         return "명"
     if name in ["문항수"]:
         return "개"
@@ -3031,7 +3215,7 @@ def main() -> None:
             "1. 문항정보표와 학생답 정오표를 업로드합니다.\n"
             "2. 앱이 문항정보, 정답, 배점, 학생 정오표를 자동 인식합니다.\n"
             "3. 성취수준 분할점수를 확인하고 분석 결과를 웹에서 먼저 봅니다.\n"
-            "4. 확인용 엑셀과 5종 분석 엑셀 ZIP을 다운로드합니다.\n"
+            "4. 확인용 엑셀과 6종 종합 분석 엑셀을 다운로드합니다.\n"
             "5. 필요한 경우 OpenAI API 키를 입력해 전체/개별 학생 AI 분석 초안을 생성합니다."
         )
 
@@ -3130,7 +3314,7 @@ def main() -> None:
                 for cache_key in [
                     "base_parsed_upload_signature", "base_parsed_value",
                     "runtime_analysis_signature", "runtime_analysis_value",
-                    "export_files_signature", "export_confirm_bytes", "export_zip_bytes",
+                    "export_files_signature", "export_confirm_bytes", "export_analysis_bytes",
                 ]:
                     st.session_state.pop(cache_key, None)
 
@@ -3146,7 +3330,7 @@ def main() -> None:
                     "auto_recognition_editor_signature", "auto_recognition_editor_values",
                     "base_parsed_upload_signature", "base_parsed_value",
                     "runtime_analysis_signature", "runtime_analysis_value",
-                    "export_files_signature", "export_confirm_bytes", "export_zip_bytes",
+                    "export_files_signature", "export_confirm_bytes", "export_analysis_bytes",
                 ]:
                     st.session_state.pop(key, None)
                 st.rerun()
@@ -3191,7 +3375,7 @@ def main() -> None:
             for cache_key in [
                 "base_parsed_upload_signature", "base_parsed_value",
                 "runtime_analysis_signature", "runtime_analysis_value",
-                "export_files_signature", "export_confirm_bytes", "export_zip_bytes",
+                "export_files_signature", "export_confirm_bytes", "export_analysis_bytes",
             ]:
                 st.session_state.pop(cache_key, None)
             added_files.append(f.name)
@@ -3226,7 +3410,7 @@ def main() -> None:
                 for cache_key in [
                     "base_parsed_upload_signature", "base_parsed_value",
                     "runtime_analysis_signature", "runtime_analysis_value",
-                    "export_files_signature", "export_confirm_bytes", "export_zip_bytes",
+                    "export_files_signature", "export_confirm_bytes", "export_analysis_bytes",
                 ]:
                     st.session_state.pop(cache_key, None)
                 st.rerun()
@@ -3403,7 +3587,7 @@ def main() -> None:
 
     st.markdown("<div class='big-section-gap'></div>", unsafe_allow_html=True)
     render_step_header("2", "문항정보 수정", "문항별 평가요소, 성취기준, 난이도, 배점, 정답을 실제 분석 목적에 맞게 보정합니다.")
-    st.caption("나이스 문항정보표에서 자동 인식한 값입니다. 평가 후 분석 자료를 더 구체화하려면 평가영역, 성취기준, 난이도 등을 여기서 수정하세요. 수정한 값은 아래 분석 결과, 확인용 엑셀, 5종 분석 엑셀, AI 분석에 모두 반영됩니다.")
+    st.caption("나이스 문항정보표에서 자동 인식한 값입니다. 평가 후 분석 자료를 더 구체화하려면 평가영역, 성취기준, 난이도 등을 여기서 수정하세요. 수정한 값은 아래 분석 결과, 확인용 엑셀, 6종 종합 분석 엑셀, AI 분석에 모두 반영됩니다.")
 
     editor_signature = make_question_editor_signature(question_file, answer_files)
     editor_state_key = "question_info_editor_df"
@@ -3676,7 +3860,7 @@ def main() -> None:
         analysis = analyze_all(parsed, total_full_score, cuts)
         st.session_state["runtime_analysis_signature"] = analysis_signature
         st.session_state["runtime_analysis_value"] = analysis
-        for cache_key in ["export_files_signature", "export_confirm_bytes", "export_zip_bytes"]:
+        for cache_key in ["export_files_signature", "export_confirm_bytes", "export_analysis_bytes"]:
             st.session_state.pop(cache_key, None)
 
     warn_df = parsed.validation_df[parsed.validation_df["검증결과"] == "확인 필요"] if not parsed.validation_df.empty else pd.DataFrame()
@@ -4736,14 +4920,14 @@ def main() -> None:
                         )
 
     st.markdown("<div class='big-section-gap'></div>", unsafe_allow_html=True)
-    render_step_header("4", "다운로드", "확인용 입력자료와 5종 분석 결과를 엑셀 파일로 내려받습니다.")
+    render_step_header("4", "다운로드", "확인용 입력자료와 6종 분석 결과를 엑셀 파일로 내려받습니다.")
     d1, d2 = st.columns(2)
     if st.session_state.get("export_files_signature") != analysis_signature:
         st.session_state["export_confirm_bytes"] = make_confirm_excel(parsed, analysis)
-        st.session_state["export_zip_bytes"] = make_analysis_zip(parsed, analysis)
+        st.session_state["export_analysis_bytes"] = make_analysis_excel(parsed, analysis)
         st.session_state["export_files_signature"] = analysis_signature
     confirm_bytes = st.session_state["export_confirm_bytes"]
-    zip_bytes = st.session_state["export_zip_bytes"]
+    analysis_bytes = st.session_state["export_analysis_bytes"]
     d1.download_button(
         "확인용 엑셀 다운로드",
         confirm_bytes,
@@ -4752,10 +4936,10 @@ def main() -> None:
         use_container_width=True,
     )
     d2.download_button(
-        "5종 분석 엑셀 ZIP 다운로드",
-        zip_bytes,
-        file_name="성취수준별_평가결과_분석_5종.zip",
-        mime="application/zip",
+        "6종 종합 분석 엑셀 다운로드",
+        analysis_bytes,
+        file_name="성취수준별_평가결과_종합분석_6종.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
 

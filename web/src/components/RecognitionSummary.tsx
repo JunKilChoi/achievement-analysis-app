@@ -85,7 +85,6 @@ export function RecognitionSummary({
             확인하고, 필요한 값은 아래에서 수정합니다.
           </p>
         </div>
-        <small>{result.elapsedSeconds.toFixed(1)}초</small>
       </section>
 
       <section className="recognition-card">
@@ -160,11 +159,11 @@ export function RecognitionSummary({
           <div>
             <p className="section-number">02</p>
             <h2>문항정보 수정</h2>
+            <p className="heading-description">
+              자동 인식한 평가요소, 성취기준, 난이도, 배점과 정답을 실제
+              문항에 맞게 확인·수정합니다.
+            </p>
           </div>
-          <p>
-            자동 인식한 평가요소, 성취기준, 난이도, 배점과 정답을 실제
-            문항에 맞게 확인·수정합니다.
-          </p>
         </div>
         <Notice>
           가로 입력칸에서 수정한 평가요소, 성취기준, 난이도, 배점, 정답은
@@ -196,11 +195,11 @@ export function RecognitionSummary({
           <div>
             <p className="section-number">03</p>
             <h2>분석 기준 및 결과 확인</h2>
+            <p className="heading-description">
+              성취수준 분할점수를 확인한 뒤 분석을 실행합니다. 기본값은 과목
+              만점의 90%, 80%, 70%, 60%입니다.
+            </p>
           </div>
-          <p>
-            성취수준 분할점수를 확인한 뒤 분석을 실행합니다. 기본값은 과목
-            만점의 90%, 80%, 70%, 60%입니다.
-          </p>
         </div>
         <p className="editor-caption">
           선택형 만점과 서답형 만점은 위 ‘평가정보 자동 인식값 수정’에서

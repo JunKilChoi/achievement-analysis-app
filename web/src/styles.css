@@ -47,82 +47,30 @@ button:disabled {
     linear-gradient(#f8faf7, #f1f4f1);
 }
 
-.topbar,
-main,
-footer {
+main {
   width: min(1180px, calc(100% - 48px));
   margin-inline: auto;
 }
 
-.topbar {
-  height: 86px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid rgba(15, 91, 82, 0.12);
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: var(--ink);
-  text-decoration: none;
-}
-
-.brand-mark {
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  border-radius: 13px;
-  color: white;
-  background: var(--green);
-  font-family: serif;
-  font-size: 22px;
-}
-
-.brand strong,
-.brand small {
-  display: block;
-}
-
-.brand strong {
-  font-size: 17px;
-  letter-spacing: -0.03em;
-}
-
-.brand small {
-  margin-top: 1px;
-  color: var(--muted);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.privacy-pill {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 14px;
-  border: 1px solid #cfe0d9;
-  border-radius: 999px;
-  color: #2f5f58;
-  background: rgba(255, 255, 255, 0.7);
-  font-size: 12px;
-}
-
-.privacy-pill span {
-  color: #47a176;
-  font-size: 8px;
-}
-
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 330px;
+  grid-template-columns: minmax(0, 1fr) 390px;
   gap: 48px;
   align-items: end;
   padding: 76px 0 62px;
+}
+
+.version-label {
+  width: fit-content;
+  margin: 0 0 16px;
+  padding: 6px 11px;
+  border: 1px solid rgba(209, 145, 75, 0.28);
+  border-radius: 999px;
+  color: #a76425;
+  background: rgba(255, 247, 235, 0.82);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
 }
 
 .hero-kicker,
@@ -183,6 +131,7 @@ footer {
 .engine-card strong {
   font-size: 13px;
   line-height: 1.5;
+  white-space: nowrap;
 }
 
 .status-light {
@@ -490,6 +439,7 @@ footer {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
+  margin-top: 28px;
   padding-top: 18px;
   padding-bottom: 18px;
 }
@@ -552,39 +502,11 @@ footer {
 .action-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 30px;
   margin-top: 22px;
   padding-top: 22px;
   border-top: 1px solid #e4e9e6;
-}
-
-.action-bar > div {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.action-bar i {
-  width: 28px;
-  height: 1px;
-  background: #d3dcd8;
-}
-
-.step-check {
-  width: 22px;
-  height: 22px;
-  display: inline-grid;
-  place-items: center;
-  border: 1px solid #cdd8d4;
-  border-radius: 50%;
-  color: var(--green);
-  background: white;
-  font-size: 10px;
-  font-style: normal;
-  font-weight: 800;
 }
 
 .analysis-status,
@@ -699,18 +621,6 @@ footer {
   gap: 10px;
 }
 
-footer {
-  display: flex;
-  justify-content: space-between;
-  padding: 34px 0 48px;
-  color: #7d8885;
-  font-size: 11px;
-}
-
-footer p {
-  margin: 0;
-}
-
 .dashboard {
   padding: 46px 0 0;
 }
@@ -753,11 +663,6 @@ footer p {
   margin: 0;
   color: #4f5a61;
   font-size: 13px;
-}
-
-.step-banner small {
-  margin-left: auto;
-  color: var(--muted);
 }
 
 .recognition-card {
@@ -1179,12 +1084,6 @@ footer p {
   gap: 14px;
 }
 
-.dashboard-actions > span {
-  color: #44806f;
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .analysis-tabs {
   position: sticky;
   top: 0;
@@ -1233,10 +1132,6 @@ footer p {
 }
 
 .panel-heading {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 40px;
   margin-bottom: 28px;
   padding-bottom: 22px;
   border-bottom: 1px solid #e6ebe8;
@@ -1248,13 +1143,13 @@ footer p {
   letter-spacing: -0.045em;
 }
 
-.panel-heading > p {
-  max-width: 550px;
-  margin: 0;
+.panel-heading .heading-description {
+  max-width: none;
+  margin: 10px 0 0;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.7;
-  text-align: right;
+  text-align: left;
 }
 
 .dashboard-summary {
@@ -2333,6 +2228,28 @@ th[aria-sort="descending"] .sort-button i {
   line-height: 1.6;
 }
 
+.statistics-download-copy {
+  min-width: 0;
+}
+
+.download-sheet-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.download-sheet-list span {
+  padding: 5px 10px;
+  border: 1px solid #cfe0da;
+  border-radius: 999px;
+  color: #195f55;
+  background: #f7fbf9;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
 .diagnosis-table-cell {
   padding: 5px 8px !important;
 }
@@ -3056,7 +2973,6 @@ th[aria-sort="descending"] .sort-button i {
 }
 
 /* 읽기와 조작이 잦은 본문 요소는 13px 미만으로 내려가지 않게 통일합니다. */
-.brand small,
 .hero-kicker,
 .card-eyebrow,
 .section-number,
@@ -3105,7 +3021,6 @@ th[aria-sort="descending"] .sort-button i {
   font-size: 13px;
 }
 
-.privacy-pill,
 .primary-button,
 .secondary-button,
 .danger-button,
@@ -3129,9 +3044,8 @@ th[aria-sort="descending"] .sort-button i {
 .cut-grid label span,
 .cut-grid input,
 .dashboard-header p:last-child,
-.dashboard-actions > span,
 .analysis-tabs button,
-.panel-heading > p,
+.panel-heading .heading-description,
 .select-field,
 .section-description,
 .student-picker select,
@@ -3143,8 +3057,7 @@ th[aria-sort="descending"] .sort-button i {
 .ai-field textarea,
 .prompt-preview textarea,
 .ai-result-text,
-.export-details,
-footer {
+.export-details {
   font-size: 14px;
 }
 
@@ -3162,9 +3075,7 @@ footer {
 }
 
 @media (max-width: 850px) {
-  .topbar,
-  main,
-  footer {
+  main {
     width: min(100% - 28px, 680px);
   }
 
@@ -3172,6 +3083,10 @@ footer {
     grid-template-columns: 1fr;
     gap: 28px;
     padding: 52px 0 42px;
+  }
+
+  .engine-card strong {
+    white-space: normal;
   }
 
   .upload-grid,
@@ -3198,10 +3113,6 @@ footer {
   .panel-heading {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .panel-heading > p {
-    text-align: left;
   }
 
   .metric-strip {
@@ -3279,16 +3190,9 @@ footer {
     grid-template-columns: 130px minmax(0, 1fr) 130px;
   }
 
-  .action-bar > div {
-    flex-wrap: wrap;
-  }
 }
 
 @media (max-width: 560px) {
-  .privacy-pill {
-    display: none;
-  }
-
   .hero h1 {
     font-size: 38px;
   }
@@ -3310,10 +3214,6 @@ footer {
 
   .step-banner {
     align-items: flex-start;
-  }
-
-  .step-banner small {
-    display: none;
   }
 
   .question-editor-toolbar {

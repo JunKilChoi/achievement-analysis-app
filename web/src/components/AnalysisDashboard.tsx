@@ -31,7 +31,7 @@ interface AnalysisDashboardProps {
   output: AnalysisOutput;
   onReset(): void;
   onDownloadConfirm(): void;
-  onDownloadZip(): void;
+  onDownloadAnalysis(): void;
 }
 
 interface StudentPickerProps {
@@ -63,8 +63,8 @@ function PanelHeading({
       <div>
         <p className="card-eyebrow">분석 결과</p>
         <h2>{title}</h2>
+        <p className="heading-description">{description}</p>
       </div>
-      <p>{description}</p>
     </div>
   );
 }
@@ -441,7 +441,7 @@ export function AnalysisDashboard({
   output,
   onReset,
   onDownloadConfirm,
-  onDownloadZip,
+  onDownloadAnalysis,
 }: AnalysisDashboardProps) {
   const [activeTab, setActiveTab] = useState<TabName>("성취도 분석");
   const [comparisonClass, setComparisonClass] = useState("");
@@ -620,7 +620,6 @@ export function AnalysisDashboard({
           </p>
         </div>
         <div className="dashboard-actions">
-          <span>{output.elapsedSeconds.toFixed(1)}초 분석 완료</span>
           <button className="secondary-button" type="button" onClick={onReset}>
             자동 인식 결과로 돌아가기
           </button>
@@ -1194,12 +1193,20 @@ export function AnalysisDashboard({
               </button>
             </div>
             <div className="download-panel statistics-download-panel">
-              <div>
-                <h3>5종 분석 Excel ZIP</h3>
-                <p>전체·문항·학급·평가영역·성취기준 분석 Excel을 묶어서 받습니다.</p>
+              <div className="statistics-download-copy">
+                <h3>6종 종합 분석 Excel</h3>
+                <p>모든 분석표를 찾기 쉬운 개별 시트로 정리한 Excel 한 파일입니다.</p>
+                <div className="download-sheet-list" aria-label="포함된 분석 영역">
+                  <span>성취도</span>
+                  <span>문항별</span>
+                  <span>학급별</span>
+                  <span>평가영역별</span>
+                  <span>성취기준별</span>
+                  <span>성취수준별</span>
+                </div>
               </div>
-              <button className="primary-button" type="button" onClick={onDownloadZip}>
-                5종 분석 ZIP 받기
+              <button className="primary-button" type="button" onClick={onDownloadAnalysis}>
+                종합 분석 Excel 받기
               </button>
             </div>
           </>

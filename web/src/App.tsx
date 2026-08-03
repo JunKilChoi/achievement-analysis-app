@@ -17,7 +17,7 @@ import {
 
 const INITIAL_ENGINE_STATUS: EngineStatus = {
   state: "loading",
-  message: "브라우저 분석 엔진을 준비하고 있습니다.",
+  message: "분석 기능을 준비하고 있습니다.",
 };
 
 function downloadBytes(bytes: Uint8Array, fileName: string, mimeType: string) {
@@ -174,20 +174,6 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="/" aria-label="성취분석 홈">
-          <span className="brand-mark">成</span>
-          <span>
-            <strong>성취분석</strong>
-            <small>Achievement Insight</small>
-          </span>
-        </a>
-        <div className="privacy-pill">
-          <span aria-hidden="true">●</span>
-          모든 파일은 이 기기에서만 처리됩니다
-        </div>
-      </header>
-
       {output ? (
         <AnalysisDashboard
           output={output}
@@ -201,11 +187,11 @@ export default function App() {
               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
           }
-          onDownloadZip={() =>
+          onDownloadAnalysis={() =>
             downloadBytes(
-              output.analysisZip,
-              "성취수준별_평가결과_분석.zip",
-              "application/zip",
+              output.analysisWorkbook,
+              "성취수준별_평가결과_종합분석_6종.xlsx",
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
           }
         />
@@ -231,33 +217,32 @@ export default function App() {
       <main>
         <section className="hero">
           <div>
-            <p className="hero-kicker">교사를 위한 평가 분석 도구</p>
+            <p className="version-label">Version 2.0</p>
             <h1>
-              평가 결과를 올리면,
+              성취수준별
               <br />
-              <em>수업에 필요한 해석</em>이 보입니다.
+              평가결과 분석
             </h1>
             <p className="hero-copy">
-              문항정보표와 학생별 정오표를 결합해 성취수준, 문항, 학급,
-              평가영역별 결과를 한 번에 분석합니다.
+              문항·학급·성취수준별 평가 분석 도구
             </p>
           </div>
           <aside className="engine-card" aria-live="polite">
             <span className={`status-light is-${engineStatus.state}`} />
             <div>
-              <small>브라우저 분석 엔진</small>
+              <small>분석 준비</small>
               <strong>{engineStatus.message}</strong>
             </div>
           </aside>
         </section>
 
-        <details className="use-flow">
+        <details className="use-flow" open>
           <summary>사용 흐름</summary>
           <ol>
             <li>문항정보표와 학생답 정오표를 업로드합니다.</li>
             <li>앱이 문항정보, 정답, 배점, 학생 정오표를 자동 인식합니다.</li>
             <li>인식 결과와 문항정보를 확인·수정하고 성취수준 분할점수를 정합니다.</li>
-            <li>다운로드 없이 각 분석 결과를 웹 화면에서 먼저 확인합니다.</li>
+            <li>각 분석 결과를 웹 화면에서 확인합니다.</li>
             <li>필요한 경우 본인의 OpenAI API 키로 전체·개별·원안지 AI 분석을 실행합니다.</li>
           </ol>
         </details>
@@ -268,8 +253,35 @@ export default function App() {
               <p className="section-number">01</p>
               <h2>분석 자료 준비</h2>
             </div>
-            <p>두 종류의 파일만 준비하면 됩니다.</p>
           </div>
+
+          <details className="upload-guide" open>
+            <summary>나이스 파일 다운로드 경로와 업로드 주의사항</summary>
+            <div className="guide-grid">
+              <div>
+                <h3>문항정보표</h3>
+                <p>
+                  나이스 → [교과담임] → [정기시험] → [문항정보표관리] →
+                  학년·과목 선택 → [조회] → [출력] → [XLS data]
+                </p>
+              </div>
+              <div>
+                <h3>교과목별학생정오표</h3>
+                <p>
+                  나이스 → [교과담임] → [정기시험조회/통계] →
+                  [교과목별학생정오표] → 강의실별 [조회] → [XLS data]
+                </p>
+              </div>
+            </div>
+            <p>
+              여러 강의실을 담당하는 경우 강의실별 정오표를 각각 저장한 뒤
+              한꺼번에 올리거나, 나중에 추가로 올릴 수 있습니다.
+            </p>
+            <Notice tone="warning" title="주의">
+              두 파일 모두 XLS data 버전이어야 합니다. PDF, 화면 출력용 파일,
+              임의로 편집한 엑셀 파일은 정상 인식되지 않을 수 있습니다.
+            </Notice>
+          </details>
 
           <div className="upload-grid">
             <FileDropZone
@@ -303,34 +315,6 @@ export default function App() {
             isLoading={isPreviewing}
           />
 
-          <details className="upload-guide">
-            <summary>나이스 파일 다운로드 경로와 업로드 주의사항</summary>
-            <div className="guide-grid">
-              <div>
-                <h3>문항정보표</h3>
-                <p>
-                  나이스 → [교과담임] → [정기시험] → [문항정보표관리] →
-                  학년·과목 선택 → [조회] → [출력] → [XLS data]
-                </p>
-              </div>
-              <div>
-                <h3>교과목별학생정오표</h3>
-                <p>
-                  나이스 → [교과담임] → [정기시험조회/통계] →
-                  [교과목별학생정오표] → 강의실별 [조회] → [XLS data]
-                </p>
-              </div>
-            </div>
-            <p>
-              여러 강의실을 담당하는 경우 강의실별 정오표를 각각 저장한 뒤
-              한꺼번에 올리거나, 나중에 추가로 올릴 수 있습니다.
-            </p>
-            <Notice tone="warning" title="주의">
-              두 파일 모두 XLS data 버전이어야 합니다. PDF, 화면 출력용 파일,
-              임의로 편집한 엑셀 파일은 정상 인식되지 않을 수 있습니다.
-            </Notice>
-          </details>
-
           <div className="template-download">
             <div>
               <strong>나이스 문항정보표가 없나요?</strong>
@@ -363,16 +347,6 @@ export default function App() {
           </div>
 
           <div className="action-bar">
-            <div>
-              <span className="step-check">{questionFiles.length === 1 ? "✓" : "1"}</span>
-              문항정보표
-              <i />
-              <span className="step-check">{answerFiles.length ? "✓" : "2"}</span>
-              정오표
-              <i />
-              <span className="step-check">3</span>
-              결과 확인
-            </div>
             <button
               className="primary-button"
               type="button"
@@ -410,10 +384,6 @@ export default function App() {
       </main>
       )}
 
-      <footer>
-        <p>서버 업로드 없음 · 학생 개인정보 저장 없음 · 설치 없이 사용</p>
-        <span>v0.1 Cloudflare migration</span>
-      </footer>
     </div>
   );
 }
