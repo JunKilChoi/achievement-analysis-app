@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+web/node_modules/
+web/dist/
+web/public/core/app.py
+web/*.tsbuildinfo

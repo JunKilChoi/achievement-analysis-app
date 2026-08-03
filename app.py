@@ -1,8 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v1.125
+성취수준별 평가결과 분석 웹앱 v1.133
 
 버전 기록
+- v1.133: 문항 진단의 A~E 성취수준별 정답률 그래프에 각 수준의 실제 응시 인원을 괄호로 함께 표시
+- v1.132: 문항 진단 기준 설정을 기본 펼침 상태의 최상단으로 이동하고 문항 상태 요약을 한 줄로 축소하며, 기본정보 아래에 6개 체크리스트를 세로 배치하고 각 기준별 근거 수치·그래프를 동일한 순서로 재구성
+- v1.131: 문항 진단을 6개 검토 체크리스트와 신호 개수 기반 판정으로 재구성하고 극단 정답률·학급 간 차이·최소 학급 인원 기준을 조정 가능하게 하며, 검사신뢰도 α는 판정에서 제외해 접이식 참고 정보로 이동
+- v1.130: 독립된 문항 진단 화면을 위해 문항별 제외 신뢰도와 전체 신뢰도 대비 변화량을 계산하고, 문항별 분석에서 해당 진단으로 바로 이동할 수 있도록 분석 데이터를 확장
+- v1.129: 앱 전용 문항정보표 입력 양식의 상단 제목·설명을 A:F 범위로 병합해 행이 과도하게 높아지지 않도록 하고 모든 시트의 틀 고정을 해제
+- v1.128: 화면 하단의 결과 파일 내보내기를 제거하고 AI 분석 앞에 '통계 엑셀' 탭을 추가하여 확인용 Excel과 5종 분석 Excel ZIP을 용도 설명과 함께 제공
+- v1.127: 브라우저판 AI 분석 Word 보고서 생성 시 matplotlib·Pillow 수식 이미지 도구를 함께 준비하여 LaTeX 수식이 원문으로 남지 않고 투명 PNG 이미지로 삽입되도록 복원
+- v1.126: 전체·문항 고급 AI 분석에는 익명 집계 통계만 전달하고, 학생 개별 분석에는 선택한 학생 한 명의 문항·영역·성취기준 결과만 전달하도록 개인정보와 토큰 사용량을 최소화
 - v1.125: 고급 AI 분석의 모든 프롬프트 모드에 전체·학급별·문항별·성취수준별·평가영역별·성취기준별·학생별 통계표를 동일하게 전달하고, 직접 작성 모드에서는 공통 데이터 뒤의 기본 분석 지시문 자리를 사용자 프롬프트로 교체하도록 개선
 - v1.124: AI 분석 Word 보고서의 수식 이미지를 고정 크기가 아니라 해당 문단 글자 크기에 맞춰 렌더링·삽입하도록 조정하여 줄 안의 수식 크기가 주변 글자와 자연스럽게 맞도록 개선
 - v1.122: AI 분석 Word 보고서에서 축약형 LaTeX 분수(예: \frac32)를 표준 분수 형식으로 정규화하고, 문장 안의 **굵게** Markdown도 Word 서식으로 변환하여 수식과 강조 표시가 정상 출력되도록 개선
@@ -157,7 +165,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v1.125"
+APP_VERSION = "v1.133"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -434,15 +442,17 @@ def make_question_info_template_xlsx() -> bytes:
         note_fmt = wb.add_format({"bg_color": "#F8FAFC", "border": 1, "text_wrap": True, "valign": "top"})
 
         ws = writer.sheets["문항정보입력"]
-        ws.write(0, 0, "성취수준별 평가결과 분석 웹앱 문항정보표 입력 양식", title_fmt)
-        ws.write(1, 0, "나이스 문항정보표를 사용하지 않는 경우 이 양식에 문항정보를 입력한 뒤, 앱의 문항정보표 업로드에 그대로 올려 주세요.", desc_fmt)
-        ws.write(2, 0, "필수 입력 열: 문항번호, 평가요소, 성취기준, 난이도, 배점, 정답 / 복수정답은 2,3처럼 입력합니다.", desc_fmt)
+        ws.merge_range(0, 0, 0, 5, "성취수준별 평가결과 분석 웹앱 문항정보표 입력 양식", title_fmt)
+        ws.merge_range(1, 0, 1, 5, "나이스 문항정보표를 사용하지 않는 경우 이 양식에 문항정보를 입력한 뒤, 앱의 문항정보표 업로드에 그대로 올려 주세요.", desc_fmt)
+        ws.merge_range(2, 0, 2, 5, "필수 입력 열: 문항번호, 평가요소, 성취기준, 난이도, 배점, 정답 / 복수정답은 2,3처럼 입력합니다.", desc_fmt)
+        ws.set_row(0, 24)
+        ws.set_row(1, 22)
+        ws.set_row(2, 22)
         for col, value in enumerate(input_cols):
             ws.write(4, col, value, header_fmt)
         widths = [10, 36, 64, 12, 10, 14]
         for col, width in enumerate(widths):
             ws.set_column(col, col, width, input_fmt)
-        ws.freeze_panes(5, 0)
         ws.data_validation(5, 3, 44, 3, {"validate": "list", "source": ["쉬움", "보통", "어려움"]})
 
         for sheet_name in ["작성안내", "작성예시"]:
@@ -452,7 +462,6 @@ def make_question_info_template_xlsx() -> bytes:
                 gws.write(0, col, value, header_fmt)
             for col in range(len(df.columns)):
                 gws.set_column(col, col, 24 if col == 0 else 80, note_fmt)
-            gws.freeze_panes(1, 0)
     return output.getvalue()
 
 
@@ -804,6 +813,32 @@ def calc_cronbach_alpha(long_df: pd.DataFrame) -> Optional[float]:
     return float(k / (k - 1) * (1 - item_var_sum / total_var))
 
 
+def calc_alpha_if_item_deleted(long_df: pd.DataFrame) -> pd.DataFrame:
+    """각 문항을 제외했을 때의 Cronbach α를 문항번호별로 계산한다."""
+    if long_df.empty:
+        return pd.DataFrame(columns=["문항번호", "문항제외신뢰도"])
+    pivot = long_df.pivot_table(
+        index="반/번호",
+        columns="문항번호",
+        values="점수",
+        aggfunc="sum",
+        fill_value=0,
+    )
+    rows = []
+    for qno in pivot.columns:
+        reduced = pivot.drop(columns=[qno])
+        k = reduced.shape[1]
+        n = reduced.shape[0]
+        alpha = np.nan
+        if k > 1 and n > 1:
+            item_var_sum = reduced.var(axis=0, ddof=1).sum()
+            total_var = reduced.sum(axis=1).var(ddof=1)
+            if total_var != 0 and not pd.isna(total_var):
+                alpha = float(k / (k - 1) * (1 - item_var_sum / total_var))
+        rows.append({"문항번호": qno, "문항제외신뢰도": alpha})
+    return pd.DataFrame(rows)
+
+
 def make_class_score_summary_chart_df(class_achievement: pd.DataFrame) -> pd.DataFrame:
     df = class_achievement.copy()
     if df.empty:
@@ -1078,6 +1113,9 @@ def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, flo
     ).reset_index()
     item["정답률"] = item["정답자수"] / item["응시자수"]
     item = item.merge(item_discrimination(long_df, students), on="문항번호", how="left")
+    alpha = calc_cronbach_alpha(long_df)
+    item = item.merge(calc_alpha_if_item_deleted(long_df), on="문항번호", how="left")
+    item["신뢰도변화"] = item["문항제외신뢰도"] - alpha if alpha is not None else np.nan
     # 선택지 반응률
     for opt in [1, 2, 3, 4, 5, "무표기"]:
         col = f"선택지{opt}비율" if opt != "무표기" else "무표기비율"
@@ -1162,7 +1200,6 @@ def analyze_all(parsed: ParsedData, total_full_score: float, cuts: Dict[str, flo
     individual = individual.merge(weak_items, on="반/번호", how="left")
     individual["오답문항"] = individual["오답문항"].fillna("")
 
-    alpha = calc_cronbach_alpha(long_df)
     return {
         "students": students,
         "long": long_df,
@@ -1269,6 +1306,12 @@ def make_analysis_zip(parsed: ParsedData, analysis: Dict[str, Any]) -> bytes:
 # AI 분석
 # -----------------------------------------------------------------------------
 
+def get_ai_subject(parsed: ParsedData) -> str:
+    """자동 인식·수정된 평가 정보에서 AI 역할에 사용할 교과목명을 가져온다."""
+    subject = str(parsed.exam_info.get("교과목", "") or "").strip()
+    return subject if subject and subject not in {"-", "미인식", "없음"} else "해당 교과"
+
+
 def build_basic_statistics_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any]) -> str:
     """기본 분석: 원안지 없이 통계 결과만으로 확장 해석을 생성한다."""
     item = analysis["item"].copy().sort_values("정답률")
@@ -1283,8 +1326,9 @@ def build_basic_statistics_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any
         difficulty_gap = difficulty_gap.sort_values(["정답률", "문항번호"], ascending=[True, True])
     alpha = analysis.get("alpha")
     exam = parsed.exam_info
+    subject = get_ai_subject(parsed)
     return f"""
-너는 중학교 과학 평가 결과를 해석하는 교육평가 전문가이다.
+너는 중학교 {subject} 평가 결과를 해석하는 교육평가 전문가이다.
 
 아래 제공된 통계 자료를 바탕으로 평가 결과를 최대한 풍성하게 해석하라.
 원안지 문항 내용은 제공되지 않았으므로 문항의 구체적 표현, 자료, 선지 구성은 직접 볼 수 없다.
@@ -1443,8 +1487,13 @@ def build_direct_custom_ai_prompt(base_prompt: str, custom_prompt: str, analysis
     """공통 데이터는 그대로 유지하고 기본 분석 지시문 자리에 사용자 지시문을 넣는다."""
     data_context = extract_prompt_data_context(base_prompt)
     custom_prompt = str(custom_prompt or "").strip()
+    subject_match = re.search(
+        r"너는\s+중학교\s+(.+?)\s+(?:평가 결과|평가 문항|교사의)",
+        str(base_prompt or ""),
+    )
+    subject = subject_match.group(1).strip() if subject_match else "해당 교과"
     return f"""
-너는 중학교 과학 평가 결과를 해석하는 교육평가 전문가이다.
+너는 중학교 {subject} 평가 결과를 해석하는 교육평가 전문가이다.
 
 [분석 유형]
 {analysis_label}
@@ -1560,9 +1609,9 @@ BASIC_INDIVIDUAL_FOCUS_PRESETS: Dict[str, str] = {
     "평가영역·성취기준별 학생 취약점 분석": "선택한 학생의 평가영역별, 성취기준별 취약점을 중심으로 분석해 주세요. 단순히 틀린 문항을 나열하지 말고, 어떤 개념 이해, 자료 해석, 탐구 기능, 적용 능력에서 보완이 필요한지 구체적으로 제시해 주세요.",
     "정답률이 낮은 문항에서의 학생 반응 분석": "전체적으로 정답률이 낮았던 문항에서 선택한 학생이 어떤 반응을 보였는지 중심으로 분석해 주세요. 학생이 어려운 문항을 해결했는지, 또는 다른 학생들도 어려워한 문항에서 함께 어려움을 보였는지 비교하여 학습 특성을 해석해 주세요.",
     "성취수준 대비 학생의 특징 분석": "선택한 학생의 성취수준을 기준으로, 같은 성취수준 학생들과 비교했을 때 두드러지는 특징을 분석해 주세요. 해당 학생이 같은 수준의 학생들보다 강한 영역과 약한 영역을 구분하고, 추가 보완이 필요한 지점을 제시해 주세요.",
-    "학생 맞춤형 피드백 문장 제안": "선택한 학생의 평가 결과를 바탕으로 학생에게 제공할 수 있는 맞춤형 피드백을 제안해 주세요. 단순히 점수를 설명하기보다, 이 학생이 이번 평가에서 비교적 안정적으로 수행한 평가영역과 성취기준, 상대적으로 보완이 필요한 평가영역과 성취기준, 다시 확인하면 좋을 문항 유형, 다음 평가 준비 방향이 드러나도록 구체적으로 작성해 주세요. 과목 특성을 고려하여 모든 과목을 수학처럼 누적 개념 복습이 다음 단원 학습의 필수 전제인 것처럼 해석하지 말고, 사회·과학처럼 단원별 성격이 강한 과목에서는 이번 평가 결과로 확인된 취약 영역, 자료 해석 방식, 개념 확인 방식, 문제 접근 전략을 중심으로 피드백해 주세요. 학생에게는 무조건 많이 복습하라는 식의 일반적인 조언보다, 이번 시험에서 강했던 부분은 유지하고 약했던 부분은 다음 시험에서 어떻게 보완하면 좋을지 구체적인 학습 행동으로 제안해 주세요.",
+    "학생 맞춤형 피드백 문장 제안": "선택한 학생의 평가 결과를 바탕으로 학생에게 제공할 수 있는 맞춤형 피드백을 제안해 주세요. 단순히 점수를 설명하기보다, 이 학생이 이번 평가에서 비교적 안정적으로 수행한 평가영역과 성취기준, 상대적으로 보완이 필요한 평가영역과 성취기준, 다시 확인하면 좋을 문항 유형, 다음 평가 준비 방향이 드러나도록 구체적으로 작성해 주세요. 자동 인식된 교과목의 내용 구성과 학습 위계 특성을 고려하고, 모든 과목에 동일한 누적 학습 구조를 획일적으로 적용하지 마세요. 단원별 성격이 강한 교과에서는 이번 평가 결과로 확인된 취약 영역, 자료 해석 방식, 개념 확인 방식, 문제 접근 전략을 중심으로 피드백해 주세요. 학생에게는 무조건 많이 복습하라는 식의 일반적인 조언보다, 이번 시험에서 강했던 부분은 유지하고 약했던 부분은 다음 시험에서 어떻게 보완하면 좋을지 구체적인 학습 행동으로 제안해 주세요.",
     "보충 학습이 필요한 개념 중심 분석": "선택한 학생에게 보충 학습이 필요한 개념을 중심으로 분석해 주세요. 틀린 문항과 낮은 성취를 보인 평가요소를 바탕으로, 다시 학습해야 할 핵심 개념과 확인해야 할 사고 과정을 구체적으로 제시해 주세요.",
-    "다음 시험 준비를 위한 학습 전략 조언": "선택한 학생이 다음 시험을 준비할 때 활용할 수 있는 학습 전략을 중심으로 조언해 주세요. 이번 평가에서 드러난 강점과 취약점을 바탕으로, 다음 평가에서 우선 강화해야 할 학습 영역, 자주 틀린 문항 유형, 개념을 확인하는 방식, 자료를 읽고 해석하는 방식, 오답 정리 방법, 시험 준비 순서와 시간 배분 방향을 구체적으로 제안해 주세요. 단, 모든 과목을 수학처럼 누적 개념 복습이 다음 단원 학습의 필수 전제인 것처럼 해석하지 마세요. 사회·과학 등 단원별 성격이 강한 과목에서는 이 개념을 모르면 다음 학습이 치명적으로 어렵다는 식으로 과도하게 말하지 말고, 이번 평가 결과를 통해 확인된 학생의 학습 습관, 자료 해석 방식, 개념 확인 방식, 문제 접근 방식, 취약 영역 보완 전략을 중심으로 다음 시험 준비 방향을 제안해 주세요. 학생이 다음 시험에서 더 나은 결과를 얻기 위해 무엇을 더 많이 외워야 하는지가 아니라, 어떤 영역을 우선 점검하고 어떤 유형의 문제를 다시 풀어보며 어떤 방식으로 오답을 정리해야 하는지가 드러나도록 작성해 주세요.",
+    "다음 시험 준비를 위한 학습 전략 조언": "선택한 학생이 다음 시험을 준비할 때 활용할 수 있는 학습 전략을 중심으로 조언해 주세요. 이번 평가에서 드러난 강점과 취약점을 바탕으로, 다음 평가에서 우선 강화해야 할 학습 영역, 자주 틀린 문항 유형, 개념을 확인하는 방식, 자료를 읽고 해석하는 방식, 오답 정리 방법, 시험 준비 순서와 시간 배분 방향을 구체적으로 제안해 주세요. 자동 인식된 교과목의 내용 구성과 학습 위계 특성을 고려하고, 모든 과목에 동일한 누적 학습 구조를 획일적으로 적용하지 마세요. 단원별 성격이 강한 교과에서는 한 영역의 미달을 이후 모든 학습의 치명적인 결손으로 과장하지 말고, 이번 평가 결과로 확인된 학습 습관, 자료 해석 방식, 개념 확인 방식, 문제 접근 방식과 취약 영역 보완 전략을 중심으로 다음 시험 준비 방향을 제안해 주세요. 학생이 다음 시험에서 더 나은 결과를 얻기 위해 무엇을 더 많이 외워야 하는지가 아니라, 어떤 영역을 우선 점검하고 어떤 유형의 문제를 다시 풀어보며 어떤 방식으로 오답을 정리해야 하는지가 드러나도록 작성해 주세요.",
     "상위 성취로 도약하기 위한 보완점 분석": "선택한 학생이 현재 성취수준에서 한 단계 더 성장하기 위해 보완해야 할 지점을 중심으로 분석해 주세요. 단순 암기보다 개념 적용, 자료 해석, 고난도 문항 접근, 오답 분석 측면에서 어떤 학습 전략이 필요한지 구체적으로 제시해 주세요.",
 }
 
@@ -1739,27 +1788,6 @@ def build_advanced_exam_ai_prompt(
     if not difficulty_gap.empty and "문항번호" in difficulty_gap.columns:
         difficulty_gap = difficulty_gap.sort_values("문항번호")
 
-    individual = analysis.get("individual", pd.DataFrame()).copy()
-    if not individual.empty:
-        individual = individual.drop(columns=["이름"], errors="ignore")
-        sort_cols = [c for c in ["반", "번호"] if c in individual.columns]
-        if sort_cols:
-            individual = individual.sort_values(sort_cols)
-
-    domain_scores = analysis.get("domain_scores", pd.DataFrame()).copy()
-    if not domain_scores.empty:
-        domain_scores = domain_scores.drop(columns=["이름"], errors="ignore")
-        sort_cols = [c for c in ["반", "번호", "평가영역"] if c in domain_scores.columns]
-        if sort_cols:
-            domain_scores = domain_scores.sort_values(sort_cols)
-
-    standard_scores = analysis.get("standard_scores", pd.DataFrame()).copy()
-    if not standard_scores.empty:
-        standard_scores = standard_scores.drop(columns=["이름"], errors="ignore")
-        sort_cols = [c for c in ["반", "번호", "성취기준"] if c in standard_scores.columns]
-        if sort_cols:
-            standard_scores = standard_scores.sort_values(sort_cols)
-
     selected_item = pd.DataFrame()
     if item_numbers and not item.empty:
         selected_item = item.copy()
@@ -1780,6 +1808,16 @@ def build_advanced_exam_ai_prompt(
                 student_all = student_all[pd.to_numeric(student_all["문항번호"], errors="coerce").isin(item_numbers)]
             view_cols = ["문항번호", "평가영역", "성취기준", "난이도", "배점", "정답", "선택지", "정답여부", "점수"]
             existing = [c for c in view_cols if c in student_all.columns]
+            student_domain_scores = analysis.get("domain_scores", pd.DataFrame()).copy()
+            if not student_domain_scores.empty and "반/번호" in student_domain_scores.columns:
+                student_domain_scores = student_domain_scores[
+                    student_domain_scores["반/번호"] == student_key
+                ].drop(columns=["이름"], errors="ignore")
+            student_standard_scores = analysis.get("standard_scores", pd.DataFrame()).copy()
+            if not student_standard_scores.empty and "반/번호" in student_standard_scores.columns:
+                student_standard_scores = student_standard_scores[
+                    student_standard_scores["반/번호"] == student_key
+                ].drop(columns=["이름"], errors="ignore")
             student_block = f"""
 [학생 개별 요약]
 - 대상: {student_label}
@@ -1790,17 +1828,24 @@ def build_advanced_exam_ai_prompt(
 
 [학생 문항별 풀이 결과]
 {student_all[existing].to_string(index=False) if not student_all.empty else '선택 학생의 문항별 풀이 결과 없음'}
+
+[선택 학생 평가영역별 결과]
+{prompt_df(student_domain_scores, empty_text='선택 학생의 평가영역별 결과 없음')}
+
+[선택 학생 성취기준별 결과]
+{prompt_df(student_standard_scores, empty_text='선택 학생의 성취기준별 결과 없음')}
 """.strip()
 
     scope_instruction = _advanced_scope_instruction(scope, item_numbers, student_label)
     exam = parsed.exam_info
     alpha = analysis.get("alpha")
+    subject = get_ai_subject(parsed)
 
     return f"""
-너는 중학교 과학 평가 문항을 분석하는 교육평가 전문가이다.
+너는 중학교 {subject} 평가 문항을 분석하는 교육평가 전문가이다.
 
-아래에는 원안지 PDF 파일과 앱이 계산한 전체 평가 통계 자료가 함께 제공된다.
-모든 통계 자료를 빠짐없이 참고할 수 있도록 전달하지만, 분석 결과에서는 선택한 분석 유형과 사용자 지시문에 필요한 자료만 취사 선택하여 활용하라.
+아래에는 원안지 PDF 파일과 앱이 계산한 익명 집계 통계 자료가 함께 제공된다.
+학생 개별 분석인 경우에만 선택한 학생 한 명의 결과가 추가로 제공된다.
 관련성이 낮은 표를 억지로 모두 나열하지 말고, 사용한 수치와 표의 의미를 원안지 내용과 연결하여 해석하라.
 
 {scope_instruction}
@@ -1844,15 +1889,6 @@ def build_advanced_exam_ai_prompt(
 
 [예상 난이도와 실제 정답률 전체 판정]
 {prompt_df(difficulty_gap, empty_text='난이도 비교 데이터 없음')}
-
-[학생별 점수·성취수준 요약 · 이름 제외]
-{prompt_df(individual)}
-
-[학생별 평가영역 결과 · 이름 제외]
-{prompt_df(domain_scores)}
-
-[학생별 성취기준 결과 · 이름 제외]
-{prompt_df(standard_scores)}
 
 {student_block if scope == '원안지 기반 학생 개별 분석' else ''}
 
@@ -1903,8 +1939,9 @@ def build_individual_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], stu
     wrong = long_df[(long_df["반/번호"] == student_key) & (~long_df["정답여부"])].copy()
     wrong_view = wrong[["문항번호", "평가영역", "난이도", "배점", "정답", "선택지", "성취기준"]].head(20)
     domain_view = domain_scores[domain_scores["반/번호"] == student_key][["평가영역", "영역점수", "영역배점", "영역정답률"]]
+    subject = get_ai_subject(parsed)
     return f"""
-너는 중학교 과학 교사의 학생별 평가 피드백 작성을 돕는 전문가다.
+너는 중학교 {subject} 교사의 학생별 평가 피드백 작성을 돕는 전문가다.
 아래 데이터만 근거로 개별 학생의 학습 특성을 해석하라. 단정적 진단, 인성 평가, 과도한 추측은 금지한다.
 
 [학생]
@@ -3280,7 +3317,7 @@ def main() -> None:
             "학년": str(parsed.exam_info.get("학년", "1학년")),
             "학기": str(parsed.exam_info.get("학기", "1학기")),
             "평가구분": str(parsed.exam_info.get("평가구분", "중간고사")),
-            "교과목": str(parsed.exam_info.get("교과목", "과학")),
+            "교과목": str(parsed.exam_info.get("교과목", "")),
             "선택형문항수": safe_int(parsed.exam_info.get("선택형문항수"), len(parsed.question_df)),
             "서답형문항수": safe_int(parsed.exam_info.get("서답형문항수"), 0),
             "학생수": safe_int(parsed.exam_info.get("학생수"), len(parsed.students_df)),
@@ -3336,7 +3373,7 @@ def main() -> None:
         temp_auto_info_values["학년"] = cols[1].text_input("학년", temp_auto_info_values.get("학년", "1학년"), key=f"auto_grade_{auto_info_key_suffix}")
         temp_auto_info_values["학기"] = cols[2].text_input("학기", temp_auto_info_values.get("학기", "1학기"), key=f"auto_semester_{auto_info_key_suffix}")
         temp_auto_info_values["평가구분"] = cols[3].text_input("평가구분", temp_auto_info_values.get("평가구분", "중간고사"), key=f"auto_eval_type_{auto_info_key_suffix}")
-        temp_auto_info_values["교과목"] = cols[4].text_input("교과목", temp_auto_info_values.get("교과목", "과학"), key=f"auto_subject_{auto_info_key_suffix}")
+        temp_auto_info_values["교과목"] = cols[4].text_input("교과목", temp_auto_info_values.get("교과목", ""), key=f"auto_subject_{auto_info_key_suffix}")
 
         cols = st.columns(4)
         temp_auto_info_values["선택형문항수"] = int(cols[0].number_input("선택형 문항 수", min_value=0, value=safe_int(temp_auto_info_values.get("선택형문항수"), len(parsed.question_df)), step=1, key=f"auto_selected_q_count_{auto_info_key_suffix}"))
