@@ -1,0 +1,31 @@
+{
+  "name": "achievement-analysis-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "copy-core": "node scripts/copy-core.mjs",
+    "predev": "pnpm copy-core",
+    "dev": "vite",
+    "prebuild": "pnpm copy-core",
+    "build": "tsc -b && vite build --configLoader native",
+    "preview": "vite preview --configLoader native"
+  },
+  "dependencies": {
+    "katex": "^0.18.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.5",
+    "typescript": "7.0.2",
+    "vite": "8.2.0"
+  },
+  "packageManager": "pnpm@11.9.0"
+}
