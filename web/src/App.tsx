@@ -217,7 +217,7 @@ export default function App() {
       <main>
         <section className="hero">
           <div>
-            <p className="version-label">Version 2.1.0</p>
+            <p className="version-label">Version 2.1.1</p>
             <h1>
               성취수준별
               <br />
