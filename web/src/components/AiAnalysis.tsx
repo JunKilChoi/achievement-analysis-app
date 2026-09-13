@@ -69,7 +69,6 @@ export function AiAnalysis({ output }: { output: AnalysisOutput }) {
   const [model, setModel] = useState("gpt-4o-mini");
   const [sectionMode, setSectionMode] = useState<"basic" | "advanced">("basic");
   const [basicMode, setBasicMode] = useState<"overall" | "individual">("overall");
-  const [anonymize, setAnonymize] = useState(true);
   const [studentKey, setStudentKey] = useState(
     String(output.tables.individual[0]?.["반/번호"] ?? ""),
   );
@@ -144,7 +143,6 @@ export function AiAnalysis({ output }: { output: AnalysisOutput }) {
           focusRequest,
           customPrompt,
           studentKey,
-          anonymize,
           pdfName: pdf?.name ?? "원안지 PDF 미업로드",
           advancedScope,
           itemNumbers,
@@ -174,7 +172,6 @@ export function AiAnalysis({ output }: { output: AnalysisOutput }) {
     focusRequest,
     customPrompt,
     studentKey,
-    anonymize,
     pdf,
     advancedScope,
     itemNumbers,
@@ -385,25 +382,22 @@ export function AiAnalysis({ output }: { output: AnalysisOutput }) {
               학생 개별 분석
             </button>
           </div>
-          <label className="checkbox-field">
-            <input
-              type="checkbox"
-              checked={anonymize}
-              onChange={(event) => setAnonymize(event.target.checked)}
-            />
-            학생 개별 분석에서 이름을 API로 보내지 않기
-          </label>
           {basicMode === "individual" ? (
-            <label className="ai-field">
-              <span>AI 분석 대상 학생</span>
-              <select value={studentKey} onChange={(event) => setStudentKey(event.target.value)}>
-                {output.tables.individual.map((row) => (
-                  <option key={String(row["반/번호"])} value={String(row["반/번호"])}>
-                    {row["반/번호"]} · {row["이름"]}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <>
+              <p className="privacy-note">
+                학생 이름은 AI에 전송되지 않으며 반·번호로만 구분합니다.
+              </p>
+              <label className="ai-field">
+                <span>AI 분석 대상 학생(반·번호)</span>
+                <select value={studentKey} onChange={(event) => setStudentKey(event.target.value)}>
+                  {output.tables.individual.map((row) => (
+                    <option key={String(row["반/번호"])} value={String(row["반/번호"])}>
+                      {row["반/번호"]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
           ) : null}
         </section>
       ) : (

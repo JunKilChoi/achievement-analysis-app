@@ -58,7 +58,6 @@ export interface AiPromptRequest {
   focusRequest?: string;
   customPrompt?: string;
   studentKey?: string;
-  anonymize?: boolean;
   pdfName?: string;
   advancedScope?: string;
   itemNumbers?: number[];
@@ -259,7 +258,6 @@ if kind == "basic-individual":
         parsed,
         analysis,
         request.get("studentKey", ""),
-        anonymize=bool(request.get("anonymize", True)),
     )
     label = "기본 분석: 학생 개별 분석"
 elif kind == "advanced":
@@ -274,7 +272,6 @@ elif kind == "advanced":
             if request.get("advancedScope") == "원안지 기반 학생 개별 분석"
             else None
         ),
-        anonymize_student=True,
     )
     label = "고급 분석: " + request.get("advancedScope", "원안지 기반 전체 시험 분석")
 else:

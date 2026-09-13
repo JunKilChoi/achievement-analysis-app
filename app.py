@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v2.0
+성취수준별 평가결과 분석 웹앱 v2.1.0
 
 버전 기록
+- v2.1.0: 학생 개별 AI 분석을 반·번호 기반 익명 식별로 고정하고, 화면 너비 확대와 제작자·문의 정보를 반영
 - v2.0: Streamlit 프로토타입의 전체 기능을 독립 웹앱으로 이식하고 UI·문항 진단·AI 분석·Word 보고서·6종 통합 Excel을 정식 배포 수준으로 개선
 - v1.134: 잘못 표기된 5종 분석을 실제 6종으로 바로잡고 ZIP 대신 안내 시트와 13개 세부 시트를 갖춘 단일 통합 Excel로 제공하며 표 서식을 개선
 - v1.133: 문항 진단의 A~E 성취수준별 정답률 그래프에 각 수준의 실제 응시 인원을 괄호로 함께 표시
@@ -166,7 +167,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v2.0"
+APP_VERSION = "v2.1.0"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -1929,7 +1930,6 @@ def build_advanced_exam_ai_prompt(
     scope: str = "원안지 기반 전체 시험 분석",
     item_numbers: Optional[List[int]] = None,
     student_key: Optional[str] = None,
-    anonymize_student: bool = True,
 ) -> str:
     """고급 분석: 원안지 PDF와 앱이 계산한 전체 통계 자료를 함께 전달한다."""
     item_numbers = item_numbers or []
@@ -1986,7 +1986,7 @@ def build_advanced_exam_ai_prompt(
         one = students[students["반/번호"] == student_key] if not students.empty and "반/번호" in students.columns else pd.DataFrame()
         if not one.empty:
             srow = one.iloc[0]
-            student_label = f"{srow['반/번호']} 학생" if anonymize_student else f"{srow['반/번호']} {srow['이름']} 학생"
+            student_label = f"{srow['반/번호']} 학생"
             student_all = long_df[long_df["반/번호"] == student_key].copy().sort_values("문항번호")
             if item_numbers:
                 student_all = student_all[pd.to_numeric(student_all["문항번호"], errors="coerce").isin(item_numbers)]
@@ -2111,7 +2111,7 @@ def build_advanced_exam_ai_prompt(
 """.strip()
 
 
-def build_individual_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], student_key: str, anonymize: bool = True) -> str:
+def build_individual_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], student_key: str) -> str:
     students = analysis["students"]
     long_df = analysis["long"]
     domain_scores = analysis["domain_scores"]
@@ -2119,7 +2119,7 @@ def build_individual_ai_prompt(parsed: ParsedData, analysis: Dict[str, Any], stu
     if one.empty:
         raise ValueError("학생을 찾지 못했습니다.")
     s = one.iloc[0]
-    student_label = f"{s['반/번호']} 학생" if anonymize else f"{s['반/번호']} {s['이름']} 학생"
+    student_label = f"{s['반/번호']} 학생"
     wrong = long_df[(long_df["반/번호"] == student_key) & (~long_df["정답여부"])].copy()
     wrong_view = wrong[["문항번호", "평가영역", "난이도", "배점", "정답", "선택지", "성취기준"]].head(20)
     domain_view = domain_scores[domain_scores["반/번호"] == student_key][["평가영역", "영역점수", "영역배점", "영역정답률"]]
@@ -4554,11 +4554,11 @@ def main() -> None:
                     horizontal=True,
                     key="basic_ai_mode",
                 )
-                anonymize = st.checkbox("학생 개별 분석에서 이름을 API로 보내지 않기", value=True, key="basic_ai_anonymize")
                 if basic_mode == "학생 개별 분석":
                     student_options = analysis["individual"].sort_values(["반", "번호"])["반/번호"].tolist()
-                    ai_student = st.selectbox("AI 분석 대상 학생", student_options, key="basic_ai_student")
-                    base_basic_prompt = build_individual_ai_prompt(parsed, analysis, ai_student, anonymize=anonymize)
+                    st.caption("학생 이름은 AI에 전송되지 않으며 반·번호로만 구분합니다.")
+                    ai_student = st.selectbox("AI 분석 대상 학생(반·번호)", student_options, key="basic_ai_student")
+                    base_basic_prompt = build_individual_ai_prompt(parsed, analysis, ai_student)
                     basic_download_name = "AI_기본분석_학생개별.docx"
                     basic_prompt_mode_key = "basic_individual_prompt_mode"
                     basic_base_preview_key = "basic_individual_base_prompt_preview"
@@ -4812,7 +4812,6 @@ def main() -> None:
                     scope=advanced_scope,
                     item_numbers=selected_item_numbers,
                     student_key=advanced_student_key,
-                    anonymize_student=True,
                 )
                 with st.expander("웹앱 기본 프롬프트 보기", expanded=False):
                     st.text_area("웹앱 기본 프롬프트", extract_prompt_instruction_preview(base_advanced_prompt), height=460)

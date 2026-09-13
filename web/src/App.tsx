@@ -217,7 +217,7 @@ export default function App() {
       <main>
         <section className="hero">
           <div>
-            <p className="version-label">Version 2.0</p>
+            <p className="version-label">Version 2.1.0</p>
             <h1>
               성취수준별
               <br />
@@ -227,13 +227,24 @@ export default function App() {
               문항·학급·성취수준별 평가 분석 도구
             </p>
           </div>
-          <aside className="engine-card" aria-live="polite">
-            <span className={`status-light is-${engineStatus.state}`} />
-            <div>
-              <small>분석 준비</small>
-              <strong>{engineStatus.message}</strong>
-            </div>
-          </aside>
+          <div className="hero-side">
+            <aside className="creator-card">
+              <small>제작</small>
+              <strong>영림중학교 최준길</strong>
+              <p>사용 방법 문의 및 오류 제보</p>
+              <span>
+                내부 메일 또는{" "}
+                <a href="mailto:blessgil783@naver.com">blessgil783@naver.com</a>
+              </span>
+            </aside>
+            <aside className="engine-card" aria-live="polite">
+              <span className={`status-light is-${engineStatus.state}`} />
+              <div>
+                <small>분석 준비</small>
+                <strong>{engineStatus.message}</strong>
+              </div>
+            </aside>
+          </div>
         </section>
 
         <details className="use-flow" open>
