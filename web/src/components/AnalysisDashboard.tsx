@@ -1103,10 +1103,6 @@ export function AnalysisDashboard({
               title="학생 개별 분석"
               description="전체 학생 결과와 선택한 학생의 문항별 답안을 함께 확인합니다."
             />
-            <Notice tone="warning">
-              학생 이름은 웹앱 내부 확인용입니다. AI 분석으로 전송할 때는
-              이름을 보내지 않는 익명화 옵션을 권장합니다.
-            </Notice>
             <DataTable
               rows={individualRows.map((row) => ({
                 ...row,

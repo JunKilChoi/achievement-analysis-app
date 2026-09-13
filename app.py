@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-성취수준별 평가결과 분석 웹앱 v2.1.1
+성취수준별 평가결과 분석 웹앱 v2.1.2
 
 버전 기록
+- v2.1.2: 학생 이름의 AI 전송 차단이 기본 동작으로 고정됨에 따라 학생 개별 분석 화면의 기존 익명화 옵션 권장 문구를 제거
 - v2.1.1: 큰 화면에서는 좌우 기본 여백만 유지한 채 디스플레이 너비를 최대한 사용하고, 작은 화면에서는 기존 반응형 배치를 유지
 - v2.1.0: 학생 개별 AI 분석을 반·번호 기반 익명 식별로 고정하고, 화면 너비 확대와 제작자·문의 정보를 반영
 - v2.0: Streamlit 프로토타입의 전체 기능을 독립 웹앱으로 이식하고 UI·문항 진단·AI 분석·Word 보고서·6종 통합 Excel을 정식 배포 수준으로 개선
@@ -168,7 +169,7 @@ except Exception:  # 배포 환경에서 openai 미설치/오류 시 앱 기본 
     OpenAI = None
 
 
-APP_VERSION = "v2.1.1"
+APP_VERSION = "v2.1.2"
 MULTI_CODE_MAP = {
     "A": [1, 2], "B": [1, 3], "C": [1, 4], "D": [1, 5], "E": [2, 3],
     "F": [2, 4], "G": [2, 5], "H": [3, 4], "I": [3, 5], "J": [4, 5],
@@ -4513,7 +4514,6 @@ def main() -> None:
 
     elif selected_analysis_tab == "학생 개별":
         with st.container(border=True):
-            st.markdown("학생 이름은 웹앱 내부 확인용입니다. AI 분석에 보낼 때는 익명화 옵션을 권장합니다.")
             individual_view = analysis["individual"].sort_values(["반", "번호"]).copy()
             hide_cols = ["선택형계산점수", "최종점수", "계산점수", "성취수준기준점수"]
             individual_view = individual_view.drop(columns=[c for c in hide_cols if c in individual_view.columns])
